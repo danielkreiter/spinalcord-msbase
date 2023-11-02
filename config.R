@@ -38,9 +38,9 @@ EDSS_MAX_AFTER = 90 # Maximal number of days that EDSS was determined after base
 BRAIN_MRI_MAX_BEFORE = 90 # Maximal number of days that baseline brain MRI took place before baseline SC MRI
 BRAIN_MRI_MAX_AFTER = 90 # Maximal number of days that baseline brain MRI took place after baseline SC MRI
 MIN_INTERVAL = 180 # Minimal interval between baseline SC MRI and the next SC MRI to take into account
-HDMT_CUTOFF = 0.95 # Proportion of follow-up that patient needed to have used a HDMT to be classified as part of the HDMT-group
-LDMT_CUTOFF = 0.95 # Proportion of follow-up that patient needed to have used a LDMT to be classified as part of the LDMT-group
-SENSITIVITY = TRUE # If current set of parameters are for a sensitivity analysis.
+HDMT_CUTOFF = 0.90 # Proportion of follow-up that patient needed to have used a HDMT to be classified as part of the HDMT-group
+LDMT_CUTOFF = 0.90 # Proportion of follow-up that patient needed to have used a LDMT to be classified as part of the LDMT-group
+SENSITIVITY = FALSE # If current set of parameters are for a sensitivity analysis.
 
 BIO_EFFECTIVENESS = list("ALE" = 5 * 365, "OCR" = 0.5*365, "RTX" = 0.5*365, "CLA" = 96 * 7, "NAT" = 60, "OFA" = 0.5 * 365, "MIT" = 0.5 * 365) # Biological effectiveness of DMTs in days
 
