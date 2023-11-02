@@ -1,0 +1,152 @@
+```{r load-config, incluse=FALSE}
+source("config.R", local = knitr::knit_global())
+```
+```{r load-data}
+if(!SENSITIVITY){
+    df_fmerge = readRDS(paste("parts/patient_grouped_wo", paste(idmt, collapse=""), ".Rda", sep=""))
+}else{
+    df_fmerge = readRDS(paste("parts/patient_grouped_wo", paste(idmt, collapse=""), "_sens", as.character(round(HDMT_CUTOFF*100, digits=0)), ".Rda", sep=""))
+}
+df_sc_mri = readRDS("parts/sc_all.Rda") # All SC MRI data
+df_relapse = readRDS("parts/relapse.Rda") # All relapse data
+df_brain_mri = readRDS("parts/brainmri.Rda") # All relapse data
+```
+```{r}
+# Construct event tables
+n = nrow(df_fmerge)
+registerDoParallel(cluster)
+result = foreach(patient_index=1:n, .combine='rbind') %dopar% {
+#for(patient_index in 1:n){
+  patient = df_fmerge[patient_index,]
+  PATIENT_ID = patient$PATIENT_ID
+  sc_lesioncount_lag_phase = 0
+  events = c()
+
+  start = 0
+  relapse_start = 0
+  brainmri_start = 0
+
+  # Check spinal MRIs during followup
+  spinal_mris = df_sc_mri[(df_sc_mri$PATIENT_ID == patient$PATIENT_ID) & (df_sc_mri$EXAM_DATE > patient$SC_MRI_START_DATE) & (df_sc_mri$EXAM_DATE <= patient$SC_MRI_END_DATE),]
+  stopifnot(nrow(spinal_mris) > 0)
+  spinal_mris = spinal_mris[order(spinal_mris$EXAM_DATE),]
+
+    # Check brain MRIs during followup
+  df_brain_mri = df_brain_mri[!is.na(df_brain_mri$EXAM_DATE),]
+  brain_mris = df_brain_mri[(df_brain_mri$PATIENT_ID == patient$PATIENT_ID) & (df_brain_mri$EXAM_DATE > patient$SC_MRI_START_DATE) & (df_brain_mri$EXAM_DATE <= patient$SC_MRI_END_DATE),]
+  brain_mris = brain_mris[order(brain_mris$EXAM_DATE),]
+
+  # Check relapses during followup
+  relapses = df_relapse[(df_relapse$PATIENT_ID == patient$PATIENT_ID) & (df_relapse$DATE_OF_ONSET > patient$SC_MRI_START_DATE) & (df_relapse$DATE_OF_ONSET <= patient$SC_MRI_END_DATE),]
+  relapses = relapses[order(relapses$DATE_OF_ONSET),]
+  relapses = relapses[!is.na(relapses$DATE_OF_ONSET),]
+
+  if(nrow(relapses) > 0){
+      for(relapse_index in 1:nrow(relapses)){
+        relapse_end = as.numeric(abs(difftime(relapses[relapse_index, "DATE_OF_ONSET"], patient$SC_MRI_START_DATE)), units="days")
+        if(relapse_end < MIN_INTERVAL){
+          next
+        }
+        relapse_outcome = 1
+        events = rbind(events, c(PATIENT_ID=PATIENT_ID, start=relapse_start, end=relapse_end, outcome=relapse_outcome, type='relapse'))
+        relapse_start = relapse_end
+      }
+  }
+
+  # Add final interval
+  relapse_outcome = 0
+  relapse_end = as.numeric(abs(difftime(patient$SC_MRI_END_DATE, patient$SC_MRI_START_DATE)), units="days")
+  events = rbind(events, c(PATIENT_ID=PATIENT_ID, start=relapse_start, end=relapse_end, outcome=relapse_outcome, type='relapse'))
+
+  # Iterate over spinal cord MRIs
+  for(spinal_mri_index in 1:nrow(spinal_mris)){
+    spinal_mri = spinal_mris[spinal_mri_index,]
+    end = as.numeric(abs(difftime(spinal_mri$EXAM_DATE, patient$SC_MRI_START_DATE)), units="days")
+    if(end < MIN_INTERVAL){
+      if(!is.na(spinal_mri$T2_LESION)){
+        sc_lesioncount_lag_phase = spinal_mri$T2_LESION
+      }
+      next
+    }
+
+    #prev_spinalmri = spinal_mris[spinal_mri_index-1,]
+    outcome = 0
+    if(is.na(spinal_mri$NEW_LESION)){
+      outcome = 0
+    }else if((spinal_mri$NEW_LESION > 0)){
+      outcome = 1
+    }
+    if(!is.na(spinal_mri$T1_GADOLINIUM_LESION)){
+        if(spinal_mri$T1_GADOLINIUM_LESION > 0){
+            outcome = 1
+        }
+    }
+    #    if(length(prev_spinalmri) > 0){
+    #if(outcome == 0 & length(spinal_mri$T2_LESION) > 0 & length(prev_spinalmri$T2_LESION) > 0){
+    #if(!is.na(spinal_mri$T2_LESION) > 0 & !is.na(prev_spinalmri$T2_LESION) > 0){
+    #      if((spinal_mri$T2_LESION > prev_spinalmri$T2_LESION) & (spinal_mri$T2_LESION > sc_lesioncount_lag_phase)){
+    #        outcome = 1
+    #      }
+    #}
+    #    }
+    #  }
+    events = rbind(events, c(PATIENT_ID=PATIENT_ID, start=start, end=end, outcome=outcome, type='sclesion'))
+    start = end
+  }
+
+  # Iterate over spinal cord MRIs
+  for(brain_mri_index in 1:nrow(brain_mris)){
+    brain_mri = brain_mris[brain_mri_index,]
+    if(length(brain_mri$EXAM_DATE) == 0){
+      next
+    }
+    if(is.na(brain_mri$EXAM_DATE)){
+      next
+    }
+    brainmri_end = as.numeric(abs(difftime(brain_mri$EXAM_DATE, patient$SC_MRI_START_DATE)), units="days")
+    if(brainmri_end < MIN_INTERVAL | brain_mri$EXAM_DATE < patient$BRAIN_MRI_EXAM_DATE){
+      next
+    }
+
+    outcome = 0
+    prev_brainmri = brain_mris[brain_mri_index-1,]
+    if(is.na(brain_mri$NEW_LESION)){
+      outcome = 0
+    }else if(brain_mri$NEW_LESION > 0){
+      outcome = 1
+    }
+    if(!is.na(brain_mri$T1_GADOLINIUM_LESION)){
+        if(brain_mri$T1_GADOLINIUM_LESION > 0){
+            outcome = 1
+        }
+    }
+    #    if(length(prev_brainmri) > 0){
+    #if(outcome == 0 & length(brain_mri$T2_LESION) > 0 & length(prev_brainmri$T2_LESION) > 0){
+    #if(!is.na(brain_mri$T2_LESION) > 0 & !is.na(prev_brainmri$T2_LESION) > 0){
+    #      if((brain_mri$T2_LESION > prev_brainmri$T2_LESION)){
+    #        outcome = 1
+    #      }
+    #}
+    #    }
+    #  }
+
+    events = rbind(events, c(PATIENT_ID=PATIENT_ID, start=brainmri_start, end=brainmri_end, outcome=outcome, type='brainlesion'))
+    brainmri_start = brainmri_end
+  }
+  return(events)
+}
+
+df_result = data.frame(result)
+df_relapse_events = df_result[df_result$type == "relapse",]
+df_sclesion_events = df_result[df_result$type == "sclesion",]
+df_brainlesion_events = df_result[df_result$type == "brainlesion",]
+if(!SENSITIVITY){
+    saveRDS(df_relapse_events, paste("parts/relapse_events_wo", paste(idmt, collapse=""), ".Rda", sep=""))
+    saveRDS(df_sclesion_events, paste("parts/sclesion_events_wo", paste(idmt, collapse=""), ".Rda", sep=""))
+    saveRDS(df_brainlesion_events, paste("parts/brainlesion_events_wo", paste(idmt, collapse=""), ".Rda", sep=""))
+}else{
+    saveRDS(df_relapse_events, paste("parts/relapse_events_wo", paste(idmt, collapse=""), "_sens", as.character(round(HDMT_CUTOFF*100, digits=0)), ".Rda", sep=""))
+    saveRDS(df_sclesion_events, paste("parts/sclesion_events_wo", paste(idmt, collapse=""), "_sens", as.character(round(HDMT_CUTOFF*100, digits=0)), ".Rda", sep=""))
+    saveRDS(df_brainlesion_events, paste("parts/brainlesion_events_wo", paste(idmt, collapse=""), "_sens", as.character(round(HDMT_CUTOFF*100, digits=0)), ".Rda", sep=""))
+}
+```

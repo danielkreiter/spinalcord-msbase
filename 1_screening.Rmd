@@ -1,0 +1,77 @@
+```{r load-config, incluse=FALSE}
+source("config.R", local = knitr::knit_global())
+```
+
+```{r import-patients}
+df_patient = read.csv("data/msb_patient.csv")
+
+sprintf("Number of rows in patient datatable: %d", nrow(df_patient))
+```
+
+```{r echo=FALSE}
+table(df_patient["MSCOURSE_2"])
+```
+
+```{r select-patients}
+# Select RRMS and SPMS patients
+df_patient$IS_NMO = as.logical(df_patient$IS_NMO)
+df_patient_select = df_patient[(df_patient$MSCOURSE_2 == "RR" | df_patient$MSCOURSE_2 == "SP") & df_patient$IS_NMO == "FALSE",]
+df_patient_select = df_patient_select[!duplicated(df_patient_select[c("PATIENT_ID")]),]
+sprintf("Number of relapse-onset patients: %d", nrow(unique(df_patient_select)))
+consort_n_RO = nrow(df_patient_select)
+```
+
+```{r import-sc}
+# Import MRI data
+df_mri = read.csv("data/msb_mri.csv")
+df_mri$EXAM_DATE = as.Date(df_mri$EXAM_DATE, format = "%d.%m.%Y")
+
+# Remove investigations in the future
+df_mri = df_mri[df_mri$EXAM_DATE < "2022-07-01",]
+
+# Extract spinal MRI investigations
+df_sc_mri = df_mri[df_mri$EXAM_TYPE == "CERVICAL_CORD" | df_mri$EXAM_TYPE == "WHOLE_SPINAL_CORD",]
+
+# Remove investigations with insufficient data
+df_sc_mri = df_sc_mri[df_sc_mri$T2_RESULT == "NORMAL" | !is.na(df_sc_mri$T2_LESION) | !is.na(df_sc_mri$NEW_LESION),]
+
+# Remove duplicate investigations
+df_sc_mri = df_sc_mri[!duplicated(df_sc_mri[c("PATIENT_ID","EXAM_DATE")]),]
+sprintf("Number of spinal cord MRIs: %d", (nrow(df_sc_mri)))
+```
+
+```{r spinal-mri-selection}
+registerDoParallel(cluster)
+result = foreach(row=1:nrow(df_patient_select), .combine = rbind) %dopar% {
+     PATIENT_ID = df_patient_select[row, "PATIENT_ID"]
+     spinal_mris = df_sc_mri[df_sc_mri$PATIENT_ID == PATIENT_ID,]
+     SC_MRI_FIRST_DATE = spinal_mris[which.min(spinal_mris$EXAM_DATE), 'EXAM_DATE']
+     SC_MRI_LAST_DATE = spinal_mris[which.max(spinal_mris$EXAM_DATE), 'EXAM_DATE']
+     if(length(SC_MRI_FIRST_DATE) == 0){SC_MRI_FIRST_DATE = NA}
+     if(length(SC_MRI_LAST_DATE) == 0){SC_MRI_LAST_DATE = NA}
+     SC_MRI_COUNT = as.numeric(nrow(spinal_mris))
+     SC_MRI_FOLLOW_UP = NA
+     if(SC_MRI_COUNT > 1){
+       SC_MRI_FOLLOW_UP = abs(difftime(as.Date(SC_MRI_FIRST_DATE), as.Date(SC_MRI_LAST_DATE), units = c("days")))
+     }
+     return(cbind(PATIENT_ID, SC_MRI_FIRST_DATE, SC_MRI_LAST_DATE, SC_MRI_COUNT, SC_MRI_FOLLOW_UP))
+}
+stopImplicitCluster()
+```
+
+```{r save-csv}
+df_sc2 = merge(df_patient_select, data.frame(result), by="PATIENT_ID", all.x=TRUE)
+df_sc2$SC_MRI_FIRST_DATE = as.Date(as.numeric(df_sc2$SC_MRI_FIRST_DATE), origin=.Date(0))
+df_sc2$SC_MRI_LAST_DATE = as.Date(as.numeric(df_sc2$SC_MRI_LAST_DATE), origin=.Date(0))
+df_sc2$SC_MRI_COUNT = as.numeric(df_sc2$SC_MRI_COUNT)
+df_sc2$SC_MRI_FOLLOW_UP = as.numeric(df_sc2$SC_MRI_FOLLOW_UP)
+df_sc2 = drop_na(df_sc2, "PATIENT_ID")
+df_sc2 = drop_na(df_sc2[df_sc2$SC_MRI_FOLLOW_UP > 180,], "PATIENT_ID")
+
+consort_n_2SC = nrow(df_sc2)
+sprintf("Number of relapse-onset patients with two spinal cord MRI's with at least 6 months followup: %d", consort_n_2SC)
+
+saveRDS(df_sc2, "parts/patient_sc2.Rda")
+saveRDS(df_sc_mri, "parts/sc_all.Rda")
+saveRDS(cbind(consort_n_RO, consort_n_2SC), 'parts/consort.Rda')
+```

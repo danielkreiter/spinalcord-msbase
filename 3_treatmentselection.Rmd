@@ -1,0 +1,335 @@
+```{r load-config, incluse=FALSE}
+source("config.R", local = knitr::knit_global())
+```
+
+```{r treatment-days-function}
+# Create named list with treatments and their duration within a time window
+treatmentdays = function(patient_id, start_date, end_date, group, treatment_data){
+  if(is.na(start_date)) return(NA)
+  days_treated = 0
+
+  # Get treatments for patient
+  patient_treatments = df_treatment_select[(df_treatment_select$PATIENT_ID == patient_id) & !(df_treatment_select$TREATMENT %in% allowed),]
+  patient_treatments = patient_treatments[order(patient_treatments$START_DATE),]
+  for(treatment_id in 1:nrow(patient_treatments)){
+    treatment = patient_treatments[treatment_id,]
+
+    # Add duration of biological effectiveness to end date
+    if(nrow(treatment) == 0) return(NA)
+
+    if(group == "hdmt" & treatment$TREATMENT %in% names(BIO_EFFECTIVENESS)){
+      treatment$END_DATE = min(treatment$END_DATE + BIO_EFFECTIVENESS[[treatment$TREATMENT]], end_date)
+      next_start_date = patient_treatments[treatment_id + 1,]$START_DATE
+      if(!is.na(next_start_date)){
+        treatment$END_DATE = min(treatment$END_DATE, patient_treatments[treatment_id + 1,]$START_DATE)
+      }
+    }
+
+    if((treatment$END_DATE >= start_date) & (treatment$START_DATE <= end_date) & (treatment$TREATMENT %in% get(group))){
+      duration = abs(difftime(min(treatment$END_DATE, end_date), max(start_date, treatment$START_DATE), units = c("days")))
+      days_treated = days_treated + duration
+      if(length(treatment_data) > 0){
+        treatment_data[[treatment$TREATMENT]] = max(treatment_data[[treatment$TREATMENT]], 0) + as.numeric(duration, units="days")
+      }
+    }
+  }
+
+  return(days_treated)
+}
+```
+
+```{r load-data}
+# Load filtered dataset
+df_sc2_treatex = readRDS("parts/patient_sc2_treatex.Rda") # Data of patients with 2 SC MRI, treatment filtered
+df_treatment_select = readRDS("parts/treatment_select.Rda") # All treatment data of selected patients
+df_sc_mri = readRDS("parts/sc_all.Rda") # All SC MRI data
+```
+
+```{r calculate-treatment-days}
+treatment_data = list()
+df_sc2_treatex = df_sc2_treatex[!is.na(df_sc2_treatex$FIRST_TREATMENT) & df_sc2_treatex$HAS_SC_MRI_START == TRUE,]
+df_sc2_treatex$SC_MRI_END_DATE = df_sc2_treatex$SC_MRI_LAST_DATE
+df_sc2_treatex$INCLUDED_FOLLOWUP = abs(difftime(as.Date(df_sc2_treatex$SC_MRI_START_DATE), as.Date(df_sc2_treatex$SC_MRI_END_DATE), units = c("days")))
+
+# Calculate how many days within follow-up patients were treated with lDMTs or hDMTs
+df_sc2_treatex[,"DAYS_HDMT_TREATED"] = mcmapply(treatmentdays, df_sc2_treatex$PATIENT_ID, df_sc2_treatex$SC_MRI_START_DATE, df_sc2_treatex$SC_MRI_END_DATE, MoreArgs = list("hdmt", treatment_data), mc.cores=num_cores)
+df_sc2_treatex[,"DAYS_LDMT_TREATED"] = mcmapply(treatmentdays, df_sc2_treatex$PATIENT_ID, df_sc2_treatex$SC_MRI_START_DATE, df_sc2_treatex$SC_MRI_END_DATE, MoreArgs = list("ldmt", treatment_data), mc.cores=num_cores)
+```
+
+```{r}
+# Calculated fraction of follow-up that patients were treated with a lDMT or hDMT
+df_sc2_treatex$HDMT_FRACTION = df_sc2_treatex$DAYS_HDMT_TREATED / as.numeric(df_sc2_treatex$INCLUDED_FOLLOWUP, units="days")
+df_sc2_treatex$LDMT_FRACTION = df_sc2_treatex$DAYS_LDMT_TREATED / as.numeric(df_sc2_treatex$INCLUDED_FOLLOWUP, units="days")
+
+# Create groups, >90% hDMT,
+df_sc2_treatex$GROUP = cut(df_sc2_treatex$HDMT_FRACTION, c(-Inf, 1-HDMT_CUTOFF, HDMT_CUTOFF, Inf), c("lDMT", "mDMT", "hDMT"))
+df_sc2_treatex[!is.na(df_sc2_treatex$INCLUDED_FOLLOWUP) & df_sc2_treatex$INCLUDED_FOLLOWUP != 0 & df_sc2_treatex$LDMT_FRACTION < LDMT_CUTOFF & df_sc2_treatex$GROUP == "lDMT", "GROUP"] = "mDMT"
+
+```
+
+```{r}
+
+df_sc2_treatex_grouped = df_sc2_treatex[!is.na(df_sc2_treatex$INCLUDED_FOLLOWUP) & df_sc2_treatex$INCLUDED_FOLLOWUP != 0,]
+
+pruning = function(df_prune_candidates, df_sc2_treatex_grouped, group){
+  prunes = 0
+  for(patient_id in 1:nrow(df_prune_candidates)){
+    patient = df_prune_candidates[patient_id,]
+    spinal_mris = df_sc_mri[df_sc_mri$PATIENT_ID == patient$PATIENT_ID,]
+
+    # Reset index
+    spinal_mris = spinal_mris[order(spinal_mris$EXAM_DATE),]
+    rownames(spinal_mris) <- 1:nrow(spinal_mris)
+
+    i = 1
+    prev_sc_mri_date = spinal_mris[which.max(spinal_mris$EXAM_DATE)-i, "EXAM_DATE"]
+    while(prev_sc_mri_date != patient$SC_MRI_START_DATE & abs(difftime(patient$SC_MRI_START_DATE, prev_sc_mri_date, units = c("days"))) > MIN_INTERVAL){
+      treatment_days = treatmentdays(patient$PATIENT_ID, patient$SC_MRI_START_DATE, prev_sc_mri_date, group, list())
+      followup = abs(difftime(patient$SC_MRI_START_DATE, prev_sc_mri_date, units = c("days")))
+      fraction = as.numeric(treatment_days,  units="days") / as.numeric(followup,  units="days")
+      if(fraction >= HDMT_CUTOFF){
+        prunes = prunes + 1
+        if(group == "hdmt"){
+          df_sc2_treatex_grouped[df_sc2_treatex_grouped$PATIENT_ID == patient$PATIENT_ID,"SC_MRI_END_DATE"] = prev_sc_mri_date
+          df_sc2_treatex_grouped[df_sc2_treatex_grouped$PATIENT_ID == patient$PATIENT_ID,"GROUP"] = "hDMT"
+          df_sc2_treatex_grouped[df_sc2_treatex_grouped$PATIENT_ID == patient$PATIENT_ID,"INCLUDED_FOLLOWUP"] = followup
+          df_sc2_treatex_grouped[df_sc2_treatex_grouped$PATIENT_ID == patient$PATIENT_ID,"HDMT_FRACTION"] = fraction
+        }else if(group == "ldmt"){
+          df_sc2_treatex_grouped[df_sc2_treatex_grouped$PATIENT_ID == patient$PATIENT_ID,"SC_MRI_END_DATE"] = prev_sc_mri_date
+          df_sc2_treatex_grouped[df_sc2_treatex_grouped$PATIENT_ID == patient$PATIENT_ID,"GROUP"] = "lDMT"
+          df_sc2_treatex_grouped[df_sc2_treatex_grouped$PATIENT_ID == patient$PATIENT_ID,"INCLUDED_FOLLOWUP"] = followup
+          df_sc2_treatex_grouped[df_sc2_treatex_grouped$PATIENT_ID == patient$PATIENT_ID,"LDMT_FRACTION"] = fraction
+        }
+        break
+      }
+      i = i + 1
+      prev_sc_mri_date = spinal_mris[which.max(spinal_mris$EXAM_DATE)-i, "EXAM_DATE"]
+    }
+  }
+  return(df_sc2_treatex_grouped)
+}
+
+# Pruning for hDMT
+df_prune_candidates = df_sc2_treatex_grouped[df_sc2_treatex_grouped$GROUP == "mDMT" & df_sc2_treatex_grouped$SC_MRI_COUNT > 2,]
+df_sc2_treatex_grouped = pruning(df_prune_candidates, df_sc2_treatex_grouped, "hdmt");
+df_prune_candidates = df_sc2_treatex_grouped[df_sc2_treatex_grouped$GROUP == "mDMT" & df_sc2_treatex_grouped$SC_MRI_COUNT > 2,]
+df_sc2_treatex_grouped = pruning(df_prune_candidates, df_sc2_treatex_grouped, "ldmt");
+df_sc2_treatex_grouped_pruned = drop_na(df_sc2_treatex_grouped[df_sc2_treatex_grouped$INCLUDED_FOLLOWUP > MIN_INTERVAL,], "PATIENT_ID")
+# Remove patients that actually started with a treatment from another class
+df_sc2_treatex_grouped_pruned = df_sc2_treatex_grouped_pruned[!((df_sc2_treatex_grouped_pruned$GROUP == "hDMT") & (!df_sc2_treatex_grouped_pruned$FIRST_TREATMENT %in% hdmt)),]
+df_sc2_treatex_grouped_pruned = df_sc2_treatex_grouped_pruned[!((df_sc2_treatex_grouped_pruned$GROUP == "lDMT") & (!df_sc2_treatex_grouped_pruned$FIRST_TREATMENT %in% ldmt)),]
+df_sc2_treatex_grouped_pruned <- df_sc2_treatex_grouped_pruned[!is.na(df_sc2_treatex_grouped_pruned$PATIENT_ID),]
+table(df_sc2_treatex_grouped_pruned[df_sc2_treatex_grouped_pruned$GROUP == 'hDMT', "FIRST_TREATMENT"])
+```
+
+```{r}
+## Match brain MRI data
+# Import MRI data
+df_mri = read.csv("data/msb_mri.csv")
+df_mri$EXAM_DATE = as.Date(df_mri$EXAM_DATE, format = "%d.%m.%Y")
+
+# Remove investigations in the future
+df_mri = df_mri[df_mri$EXAM_DATE < "2022-07-01",]
+df_mri_brain = df_mri[df_mri$EXAM_TYPE == "BRAIN",]
+df_mri_brain[!is.na(df_mri_brain$NEW_LESION) & df_mri_brain$NEW_LESION > 1, "NEW_LESION"] = 1
+
+## Import visit data
+df_visit = read.csv("data/msb_visit.csv")
+df_visit = df_visit[!is.na(df_visit$EDSS),]
+df_visit$DATE_OF_VISIT = as.Date(df_visit$DATE_OF_VISIT, format = "%d.%m.%Y")
+```
+
+```{r}
+# Remove investigations with insufficient data
+## Clean up brain MRI table
+df_mri_brain = df_mri_brain[!is.na(df_mri_brain$T2_LESION) | df_mri_brain$MCDONALD_T2_HYPERTENSIVE_LESION != "UNKNOWN",]
+```
+
+
+```{r}
+registerDoParallel(cluster)
+result = foreach(patient_index=1:nrow(df_sc2_treatex_grouped_pruned), .combine=rbind) %dopar% {
+  patient = df_sc2_treatex_grouped_pruned[patient_index,]
+  PATIENT_ID = patient$PATIENT_ID
+
+  # Match baseline EDSS
+  match_edss = df_visit[(df_visit$PATIENT_ID ==PATIENT_ID) & (df_visit$DATE_OF_VISIT >= (patient$SC_MRI_START_DATE - EDSS_MAX_BEFORE)) & (df_visit$DATE_OF_VISIT <= (patient$SC_MRI_START_DATE + EDSS_MAX_AFTER)),]
+
+  # Check if baseline EDSS is available
+  if(nrow(match_edss) > 0){
+    match_edss$INTERVAL = abs(difftime(match_edss$DATE_OF_VISIT, patient$SC_MRI_START_DATE))
+    EDSS = match_edss[which.min(match_edss$INTERVAL), "EDSS"]
+  }else{
+    EDSS = NA
+  }
+
+  # Match baseline brain MRI
+  match_brain_mri = df_mri_brain[(df_mri_brain$PATIENT_ID == PATIENT_ID) & (df_mri_brain$EXAM_DATE >= (patient$SC_MRI_START_DATE - BRAIN_MRI_MAX_BEFORE)) & (df_mri_brain$EXAM_DATE <= (patient$SC_MRI_START_DATE + BRAIN_MRI_MAX_AFTER)),]
+
+  # Check if baseline brain MRI is available
+  if(nrow(match_brain_mri) > 0){
+    match_brain_mri$INTERVAL = abs(difftime(match_brain_mri$EXAM_DATE, patient$SC_MRI_START_DATE))
+    match = match_brain_mri[which.min(match_brain_mri$INTERVAL),]
+    BRAIN_MRI_DATE = match$EXAM_DATE
+    BRAIN_MRI_FK = match$VISIT_FK
+  }else{
+    BRAIN_MRI_DATE = NA
+    BRAIN_MRI_FK = NA
+  }
+  return(cbind(PATIENT_ID, EDSS, BRAIN_MRI_DATE, BRAIN_MRI_FK))
+}
+stopImplicitCluster()
+
+result = data.frame(result)
+result = result[!is.na(result$PATIENT_ID),]
+df_sc2_treatex_grouped_pruned_edssbrain = merge(df_sc2_treatex_grouped_pruned, result, by="PATIENT_ID", all.x=TRUE)
+df_sc2_treatex_grouped_pruned_edssbrain$BRAIN_MRI_DATE = as.Date(as.numeric(df_sc2_treatex_grouped_pruned_edssbrain$BRAIN_MRI_DATE), origin=.Date(0))
+df_sc2_treatex_grouped_pruned_edssbrain$EDSS = as.numeric(df_sc2_treatex_grouped_pruned_edssbrain$EDSS)
+```
+
+```{r}
+consort_ex_EDSSbrain = sum((is.na(df_sc2_treatex_grouped_pruned_edssbrain$BRAIN_MRI_FK) | is.na(df_sc2_treatex_grouped_pruned_edssbrain$EDSS)))
+print(sum(is.na(df_sc2_treatex_grouped_pruned_edssbrain$BRAIN_MRI_FK)))
+print(sum(is.na(df_sc2_treatex_grouped_pruned_edssbrain$EDSS)))
+print(consort_ex_EDSSbrain)
+```
+```{r}
+df_sc2_treatex_grouped_pruned_edssbrain = df_sc2_treatex_grouped_pruned_edssbrain[!is.na(df_sc2_treatex_grouped_pruned_edssbrain$EDSS) & !is.na(df_sc2_treatex_grouped_pruned_edssbrain$BRAIN_MRI_DATE),]
+consort_n_complete = nrow(df_sc2_treatex_grouped_pruned_edssbrain)
+sprintf("Number of patients relapse-onset MS, >1 SC-MRI, disallowed treatments excluded, sufficient brain MRI/EDSS data: %d", consort_n_complete)
+consort_n_preLDMT = length(df_sc2_treatex_grouped_pruned_edssbrain[df_sc2_treatex_grouped_pruned_edssbrain$GROUP == "lDMT", "PATIENT_ID"])
+consort_n_preMDMT = length(df_sc2_treatex_grouped_pruned_edssbrain[df_sc2_treatex_grouped_pruned_edssbrain$GROUP == "mDMT", "PATIENT_ID"])
+consort_n_preHDMT = length(df_sc2_treatex_grouped_pruned_edssbrain[df_sc2_treatex_grouped_pruned_edssbrain$GROUP == "hDMT", "PATIENT_ID"])
+table(df_sc2_treatex_grouped_pruned_edssbrain[,"GROUP"])
+```
+```{r}
+# TODO Create clean brain MRI table for event table creation in preprocess_4
+
+# Merge brain MRI & spinal cord MRI data into main dataframe
+df_mri_brain_prefixed = df_mri_brain
+colnames(df_mri_brain_prefixed) <- paste0("BRAIN_MRI_", colnames(df_mri_brain_prefixed))
+df_fmerge = left_join(df_sc2_treatex_grouped_pruned_edssbrain, df_mri_brain_prefixed, by = c("BRAIN_MRI_FK" = "BRAIN_MRI_VISIT_FK", "PATIENT_ID" = "BRAIN_MRI_PATIENT_ID"))
+
+df_sc_mri_prefixed = df_sc_mri
+colnames(df_sc_mri_prefixed) <- paste0("SC_MRI_", colnames(df_sc_mri_prefixed))
+df_fmerge = left_join(df_fmerge, df_sc_mri_prefixed, by = c("SC_MRI_START_DATE" = "SC_MRI_EXAM_DATE", "PATIENT_ID" = "SC_MRI_PATIENT_ID"))
+```
+```{r}
+# Import and couple relapse data
+df_relapse= read.csv("data/msb_relapse.csv")
+df_relapse$DATE_OF_ONSET = as.Date(df_relapse$DATE_OF_ONSET, format='%d.%m.%Y')
+
+# Remove duplicates
+df_relapse = df_relapse[!duplicated(df_relapse[c('PATIENT_ID','DATE_OF_ONSET')]),]
+
+## Days by treatment during followup
+n = nrow(df_fmerge)
+registerDoParallel(cluster)
+result = foreach(patient_index=1:n, .combine=rbind, .packages='jsonlite') %dopar% {
+  treatment_dict = c()
+  patient = df_fmerge[patient_index,]
+  PATIENT_ID = patient$PATIENT_ID
+
+  # Find treatments of patient
+  treatments = df_treatment_select[(df_treatment_select$PATIENT_ID == PATIENT_ID) & (df_treatment_select$END_DATE >= patient$SC_MRI_START_DATE) & (df_treatment_select$START_DATE <= patient$SC_MRI_END_DATE),]
+
+  # Sort the treatments by date
+  treatments = treatments[order(treatments$START_DATE),]
+
+  # Calculate treatment days for every treatment within interval
+  for(treatment_index in 1:nrow(treatments)) {
+    treatment = treatments[treatment_index,]
+    if(nrow(treatment) == 0) next
+    if(!treatment$TREATMENT %in% allowed){
+        # Add duration of biological effectiveness to end date
+        if(treatment$TREATMENT %in% names(BIO_EFFECTIVENESS)){
+          treatment$END_DATE = treatment$END_DATE + BIO_EFFECTIVENESS[[treatment$TREATMENT]]
+          next_start_date = treatments[treatment_index + 1,]$START_DATE
+          if(!is.na(next_start_date)){
+            treatment$END_DATE = min(treatment$END_DATE, treatments[treatment_index + 1,]$START_DATE)
+          }
+        }
+        start = max(patient$SC_MRI_START_DATE, treatment$START_DATE)
+        end = min(patient$SC_MRI_END_DATE, treatment$END_DATE)
+        duration = abs(difftime(start, end, units = c("days")))
+        if(treatment$TREATMENT %in% names(treatment_dict)){
+          treatment_dict[treatment$TREATMENT] = treatment_dict[treatment$TREATMENT] + duration
+        }else{
+          treatment_dict[treatment$TREATMENT] = duration
+        }
+    }
+  }
+
+  TREATMENT_DICT = toJSON(lapply(split(treatment_dict, names(treatment_dict)), unname), auto_unbox = TRUE)
+
+  # Count relapses
+  RELAPSES_1Y = nrow(df_relapse[(df_relapse$PATIENT_ID == PATIENT_ID) & (df_relapse$DATE_OF_ONSET < patient$SC_MRI_START_DATE) & (df_relapse$DATE_OF_ONSET > patient$SC_MRI_START_DATE - 365.25),])
+  RELAPSES_2Y = nrow(df_relapse[(df_relapse$PATIENT_ID == PATIENT_ID) & (df_relapse$DATE_OF_ONSET < patient$SC_MRI_START_DATE) & (df_relapse$DATE_OF_ONSET > patient$SC_MRI_START_DATE - 365.25*2),])
+
+  return(cbind(PATIENT_ID, TREATMENT_DICT, RELAPSES_1Y, RELAPSES_2Y))
+}
+stopImplicitCluster()
+```
+```{r}
+result = data.frame(result)
+result = result[!is.na(result$PATIENT_ID),]
+result
+```
+```{r}
+df_fmerge_tmp = merge(df_fmerge, result, by="PATIENT_ID", all.x=TRUE)
+df_fmerge = df_fmerge_tmp[!duplicated(df_fmerge_tmp),]
+```
+```{r}
+df_fmerge$BRAIN_MRI_T2_LESIONCAT = df_fmerge$BRAIN_MRI_MCDONALD_T2_HYPERTENSIVE_LESION
+df_fmerge[which((df_fmerge$BRAIN_MRI_T2_LESIONCAT == "UNKNOWN") & (df_fmerge$BRAIN_MRI_T2_LESION == 0)),"BRAIN_MRI_T2_LESIONCAT"] = 0
+df_fmerge[which((df_fmerge$BRAIN_MRI_T2_LESIONCAT == "UNKNOWN") & (df_fmerge$BRAIN_MRI_T2_LESION > 0) & (df_fmerge$BRAIN_MRI_T2_LESION < 3)), "BRAIN_MRI_T2_LESIONCAT"] = 1
+df_fmerge[which((df_fmerge$BRAIN_MRI_T2_LESIONCAT == "UNKNOWN") & (df_fmerge$BRAIN_MRI_T2_LESION > 2) & (df_fmerge$BRAIN_MRI_T2_LESION < 9)), "BRAIN_MRI_T2_LESIONCAT"] = 2
+df_fmerge[which((df_fmerge$BRAIN_MRI_T2_LESIONCAT == "UNKNOWN") & (df_fmerge$BRAIN_MRI_T2_LESION > 8)), "BRAIN_MRI_T2_LESIONCAT"] = 3
+df_fmerge$SC_MRI_LESIONCOUNT = df_fmerge$SC_MRI_T2_LESION
+df_fmerge[which((is.na(df_fmerge$SC_MRI_LESIONCOUNT)) & (df_fmerge$SC_MRI_T2_RESULT == "NORMAL")),"SC_MRI_LESIONCOUNT"] = 0
+df_fmerge[which((is.na(df_fmerge$SC_MRI_LESIONCOUNT))),"SC_MRI_LESIONCOUNT"] = df_fmerge[which((is.na(df_fmerge$SC_MRI_LESIONCOUNT))),"SC_MRI_NEW_LESION"]
+```
+
+
+```{r}
+#colnames(df_fmerge)
+
+get_country <- function(x){
+  return(str_split(x, "-", simplify = TRUE)[[1]])
+}
+
+get_year_baseline <- function(x){
+  return(as.numeric(format(x, format="%Y")))
+}
+
+df_fmerge$BIRTH_DATE = as.Date(df_fmerge$BIRTH_DATE, format='%d.%m.%Y')
+df_fmerge$SYMPTOMS_DATE = as.Date(df_fmerge$SYMPTOMS_DATE, format='%d.%m.%Y')
+df_fmerge$RELAPSES_2Y = as.numeric(df_fmerge$RELAPSES_2Y)
+df_fmerge$RELAPSES_1Y = as.numeric(df_fmerge$RELAPSES_1Y)
+df_fmerge$AGE_BASELINE = as.numeric(abs(difftime(df_fmerge$BIRTH_DATE, df_fmerge$SC_MRI_START_DATE)), units="days")/365.25
+df_fmerge$DISEASE_DURATION = as.numeric(abs(difftime(df_fmerge$SYMPTOMS_DATE, df_fmerge$SC_MRI_START_DATE)), units="days")
+df_fmerge$COUNTRY = sapply(df_fmerge$PATIENT_ID, get_country)
+df_fmerge$YEAR_BASELINE = sapply(df_fmerge$SC_MRI_START_DATE, get_year_baseline)
+df_fmerge$YEAR_BASELINE = (df_fmerge$YEAR_BASELINE - mean(df_fmerge$YEAR_BASELINE))/sd(df_fmerge$YEAR_BASELINE)
+
+factor_columns =c("GENDER", "GROUP", "FIRST_TREATMENT", "BRAIN_MRI_T2_LESIONCAT", "COUNTRY")
+numeric_columns = c("AGE_BASELINE", "EDSS", "INCLUDED_FOLLOWUP", "SC_MRI_LESIONCOUNT", "RELAPSES_1Y", "DISEASE_DURATION")
+df_fmerge[numeric_columns] <- lapply(df_fmerge[numeric_columns], as.numeric)
+df_fmerge[factor_columns] <- lapply(df_fmerge[factor_columns], as.factor)
+tbl_summary(df_fmerge[append(factor_columns, numeric_columns)], by=GROUP, missing_text = "(Missing)")
+```
+```{r}
+if(!SENSITIVITY){
+    saveRDS(df_fmerge, paste("parts/patient_grouped_wo", paste(idmt, collapse=""), ".Rda", sep=""))
+    consort = readRDS("parts/consort.Rda")
+    print("CONSORT FIGURES")
+    print(cbind(consort, cbind(consort_n_complete, consort_n_preLDMT, consort_n_preMDMT, consort_n_preHDMT, consort_ex_EDSSbrain)))
+    saveRDS(cbind(consort, cbind(consort_n_complete, consort_n_preLDMT, consort_n_preMDMT, consort_n_preHDMT, consort_ex_EDSSbrain)), paste("parts/consort_wo", paste(idmt, collapse=""), ".Rda", sep=""))
+}else{
+    saveRDS(df_fmerge, paste("parts/patient_grouped_wo", paste(idmt, collapse=""), "_sens", as.character(round(HDMT_CUTOFF*100, digits=0)), ".Rda", sep=""))
+}
+saveRDS(df_relapse, "parts/relapse.Rda")
+saveRDS(df_mri_brain, "parts/brainmri.Rda")
+```
+
+

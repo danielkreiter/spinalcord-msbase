@@ -1,0 +1,152 @@
+```{r load-config, incluse=FALSE}
+source("config.R", local = knitr::knit_global())
+```
+
+```{r load-csv}
+# Load filtered dataset
+df_2sc = readRDS("parts/patient_sc2.Rda") # Data of patients with 2 SC MRI
+df_sc_mri = readRDS("parts/sc_all.Rda") # All SC MRI data
+```
+
+``` {r load-treatment}
+# Import treatment data
+df_treatment = read.csv("data/msb_treatment.csv")
+
+# Drop patients with possible placebo's and DMT combinations
+df_treatment_select = df_treatment[(df_treatment$VISIT_ID == "MS_SPECIFIC") & (df_treatment$DMT != ""),]
+df_treatment_select$EXCLUDED = FALSE
+
+# Format columns in treatment dataframe
+df_treatment_select$START_DATE = as.Date(df_treatment_select$START_DATE, format='%d.%m.%Y')
+df_treatment_select$END_DATE = as.Date(df_treatment_select$END_DATE, format='%d.%m.%Y')
+df_treatment_select$DURATION = abs(difftime(df_treatment_select[, "END_DATE"], df_treatment_select[, "START_DATE"], units = c("days")))
+df_treatment_select = drop_na(df_treatment_select, "DURATION")
+
+# Reformat synonyms/brand names of therapies
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("placebo|study|trial|studie", ignore_case = TRUE)) | str_detect(df_treatment_select$TREATMENT, regex("\\+", ignore_case = TRUE)), 'EXCLUDED'] = TRUE
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("glatira|copax", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, "TREATMENT"] = "GLA"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("tysabr|natalizumab", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "NAT"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("fingo|gilen|finimod", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "FIN"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("dmf|tecfi|dimethyl|dimetil|bg12|bg-12|difurat", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "DMF"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("ocrelizumab|ocrevus", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "OCR"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("mito|antron", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "MIT"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("feron|avonex|rebi|pleg|peg|interf|actovex|betaseron|extavia|reci", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "IFN"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("lemtrada|alem", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "ALE"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("terifl|aubagio", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "TER"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("clad|movectro", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "CLA"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("cyclo|ciclo|endoxan|endoksan", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "CYC"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("cellcept|cell-cept|mofetil|myco", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "MYC"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("gammagard|ivig|nanogam|kiovig|glob|flebo", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "IVIG"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("mtx|metho|trex", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "MTX"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("ritu|mabthera|mabhtera|mabtera|rix|rux", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "RTX"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("mayzent|sipo", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "SIP"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("aza|muran|thioprin|imu", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "SIP"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("pred|medro|ivmp|cort|solu|dexa|synac|synec", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "PRED"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("biotin|B12|folic|folium|vitamin|fusidico", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "VIT"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("ofa|kesimp|kemp", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "OFA"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("ponvory|ponesimod", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "PON"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("zeposia|ozanimod", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "OZA"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("stem|sct|stam", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "SCT"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("dacli|zinbr", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "DAC"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("laq", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "LAQ"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("opici|lingo|biib033", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "LAQ"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("plasma", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "PLAS"
+df_treatment_select[str_detect(df_treatment_select$TREATMENT, regex("famp", ignore_case = TRUE)) & df_treatment_select$EXCLUDED == FALSE, 'TREATMENT'] = "FAM"
+
+df_treatment_select[!((df_treatment_select$TREATMENT %in% hdmt) | (df_treatment_select$TREATMENT %in% idmt) | (df_treatment_select$TREATMENT %in% ldmt) | (df_treatment_select$TREATMENT %in% allowed)), "EXCLUDED"] = TRUE
+table(df_treatment_select[df_treatment_select$EXCLUDED == FALSE, "TREATMENT"])
+```
+
+```{r include=FALSE}
+#df_sc_mri[!duplicated(df_sc_mri[c("PATIENT_ID","EXAM_DATE")]),]
+df_treatment_excluded = df_treatment_select[df_treatment_select$EXCLUDED == TRUE,]
+df_treatment_excluded = df_treatment_excluded[!duplicated(df_treatment_excluded[c("PATIENT_ID")]),]
+sprintf("Number of patients to be excluded because of use of disallowed treatments: %d", nrow(df_treatment_excluded))
+```
+
+```{r}
+df_sc2_treatex = df_2sc[!(df_2sc$PATIENT_ID %in% df_treatment_excluded$PATIENT_ID),]
+sprintf("Number of patients relapse-onset MS, >1 SC-MRI, disallowed treatments excluded: %d", nrow(df_sc2_treatex))
+consort_n_2SCtreatex = nrow(df_sc2_treatex)
+#head(df_sc2_treatex[,c("PATIENT_ID", "MSCOURSE_2", "MSCOURSE_2_DATE", "SC_MRI_COUNT", "SC_MRI_FIRST_DATE", "SC_MRI_LAST_DATE", "SC_MRI_FOLLOW_UP")], 200)
+```
+
+```{r format-treatment}
+# Prepare parallel
+registerDoParallel(cluster)
+
+n = nrow(df_sc2_treatex)
+
+result = foreach(row=1:n, .combine=rbind) %dopar% {
+ PATIENT_ID = df_sc2_treatex[row, "PATIENT_ID"]
+ patient_treatments = df_treatment_select[(df_treatment_select$PATIENT_ID == PATIENT_ID) & !(df_treatment_select$TREATMENT %in% allowed),]
+ if(nrow(patient_treatments) > 0){
+   patient_first_treatment = patient_treatments[which.min(patient_treatments$START_DATE),]
+ }else{
+   return(NA); # Instead of next, which does not work in foreach-package
+ }
+
+ # Get first treatment and start+end date
+ FIRST_TREATMENT= NA
+ FIRST_TREATMENT_START= NA
+ FIRST_TREATMENT_END= NA
+ HAS_SC_MRI_START = NA
+ INTERVAL = NA
+ SC_MRI_START_DATE = NA
+ if(nrow(patient_first_treatment) > 0){
+   FIRST_TREATMENT = patient_first_treatment$TREATMENT
+   FIRST_TREATMENT_START = patient_first_treatment$START_DATE
+   FIRST_TREATMENT_END = patient_first_treatment$END_DATE
+   match_spinal = df_sc_mri[(df_sc_mri$PATIENT_ID == PATIENT_ID) & (df_sc_mri$EXAM_DATE >= (patient_first_treatment$START_DATE - SC_MRI_MAX_BEFORE)) & (df_sc_mri$EXAM_DATE <= (patient_first_treatment$START_DATE + SC_MRI_MAX_AFTER)),]
+   if(nrow(match_spinal) > 0){
+     HAS_SC_MRI_START = TRUE
+     match_spinal[,"INTERVAL"] =  abs(match_spinal$EXAM_DATE - FIRST_TREATMENT_START)
+     SC_MRI_START_DATE = match_spinal[which.min(match_spinal$INTERVAL), 'EXAM_DATE']
+   }
+ }else{
+   HAS_SC_MRI_START = FALSE
+ }
+ return(cbind(PATIENT_ID, FIRST_TREATMENT, FIRST_TREATMENT_START, FIRST_TREATMENT_END, HAS_SC_MRI_START, SC_MRI_START_DATE))
+}
+stopImplicitCluster()
+
+result = data.frame(result)
+result = result[!is.na(result$PATIENT_ID),]
+df_sc2_treatex_merge = merge(df_sc2_treatex, result, by="PATIENT_ID", all.x=TRUE)
+df_sc2_treatex_merge$FIRST_TREATMENT_START = as.Date(as.numeric(df_sc2_treatex_merge$FIRST_TREATMENT_START), origin=.Date(0))
+df_sc2_treatex_merge$FIRST_TREATMENT_END = as.Date(as.numeric(df_sc2_treatex_merge$FIRST_TREATMENT_END), origin=.Date(0))
+df_sc2_treatex_merge$SC_MRI_START_DATE = as.Date(as.numeric(df_sc2_treatex_merge$SC_MRI_START_DATE), origin=.Date(0))
+df_sc2_treatex_merge$HAS_SC_MRI_START = as.logical(df_sc2_treatex_merge$HAS_SC_MRI_START)
+```
+
+```{r}
+table(df_sc2_treatex_merge$FIRST_TREATMENT)
+```
+
+```{r}
+df_sc2_treatex <- df_sc2_treatex_merge[!is.na(df_sc2_treatex_merge$PATIENT_ID),]
+df_sc2_treatex <- df_sc2_treatex[!duplicated(df_sc2_treatex),]
+df_sc2_treatex <- df_sc2_treatex[!is.na(df_sc2_treatex$FIRST_TREATMENT),]
+sprintf("Number of patients relapse-onset MS, >1 SC-MRI, disallowed treatments excluded: %d", length(unique(df_sc2_treatex[df_sc2_treatex$HAS_SC_MRI_START == TRUE, "PATIENT_ID"])))
+if(length(unique(df_sc2_treatex[df_sc2_treatex$HAS_SC_MRI_START == TRUE, "PATIENT_ID"])) != sum(table(df_sc2_treatex[df_sc2_treatex$HAS_SC_MRI_START == TRUE, "FIRST_TREATMENT"]))){
+    print("Warning: mismatch")
+    print(length(unique(df_sc2_treatex[df_sc2_treatex$HAS_SC_MRI_START == TRUE, "PATIENT_ID"])))
+    print(sum(table(df_sc2_treatex[df_sc2_treatex$HAS_SC_MRI_START == TRUE, "FIRST_TREATMENT"])))
+}
+consort_n_hasstart = sum(table(df_sc2_treatex[df_sc2_treatex$HAS_SC_MRI_START == TRUE, "FIRST_TREATMENT"]))
+```
+```{r}
+df_sc2_treatex <- df_sc2_treatex[!is.na(df_sc2_treatex$PATIENT_ID),]
+table(df_sc2_treatex[df_sc2_treatex$HAS_SC_MRI_START == TRUE, "FIRST_TREATMENT"])
+```
+
+```{r save-csv}
+saveRDS(df_sc2_treatex, "parts/patient_sc2_treatex.Rda")
+saveRDS(df_treatment_select, "parts/treatment_select.Rda")
+consort = readRDS("parts/consort.Rda")
+print("CONSORT FIGURES")
+print(cbind(consort, cbind(consort_n_hasstart, consort_n_2SCtreatex)))
+saveRDS(cbind(consort, cbind(consort_n_hasstart, consort_n_2SCtreatex)), "parts/consort.Rda")
+```
+
+

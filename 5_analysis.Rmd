@@ -1,0 +1,1167 @@
+---
+title: "Efficacy of disease-modifying treatment on spinal cord lesion formation in relapse-onset multiple sclerosis. An MSBase registry study."
+author: "Daniel Kreiter, Tomas Kalincik, Raymond Hupperts, Francesco Patti, Daniele Spitaleri, Matteo Foschi, Andrea Surcinelle, Davide Maimome, Bassem Yamout, Samia J. Khoury, Jeannette Lechner-Scott, Serkan Ozakbas, Oliver Gerlach on behalf of the MSBase Study Group"
+output:
+  bookdown::html_document2:
+    code_folding: hide
+    number_sections: no
+    keep_md: true
+  pdf_document:
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+    keep_md: true
+editor_options:
+  markdown:
+    wrap: 72
+linestretch: 2
+lang: en
+---
+
+```{=html}
+<style>
+ p {line-height: 2em; text-align: justify; font-size: 16px}
+ .caption {font-size: 14px;}
+ h1, h2 {margin-bottom: 15px;}
+ h1 {font-size: 26px}
+ h1.title {font-size: 24px !important; line-height: 1.5em;}
+ h2 {font-size: 20px}
+ h3 {font-size: 18px}
+ h4 {font-size: 17px; font-weight: normal;}
+ .left {float: left;}
+ .warp {margin-top: -30px}
+ .warp > div > img {object-fit: cover; width:300px; height: 400px}
+ .warp > div> p.caption {max-width: 250px;}
+ .fullcenter {text-align: center; width: 100%;}
+ .fullcenter > p {text-align: center;}
+ .fullcenter > pre {text-align: left;}
+ .pie-crop > div > img {max-height: 450px; object-fit: cover;}
+ #references{max-width:940px;margin-left:auto;margin-right:auto;padding-left:15px;padding-right:15px;}
+</style>
+```
+```{r load-config, include=FALSE, message=FALSE, results='hide'}
+options(knitr.duplicate.label = 'allow')
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(dpi=300)
+
+# Load configuration
+source("config.R", local = knitr::knit_global())
+
+# Import libraries
+library("broom")
+library("survival")
+library("ggsurvfit") # Install version 0.2.1, 0.3.0 has a bug in displaying risk tables
+# install.packages("https://cran.r-project.org/src/contrib/Archive/ggsurvfit/ggsurvfit_0.2.1.tar.gz")
+library("MatchIt")
+library("cobalt")
+library("survminer")
+library("grid")
+library("consort") # Install version 1.0.1, 1.1.0 does not support dist and coord options anymore
+# install.packages("https://cran.r-project.org/src/contrib/Archive/consort/consort_1.0.1.tar.gz")
+library("gt")
+library("knitr")
+library("Hmisc")
+opts_knit$set(eval.after = "fig.cap")
+
+rebuild_db = FALSE
+rebuild_group = FALSE
+rebuild_event = FALSE
+plot_colors = c("#043061", "#d75f4e")
+palette = "RdBu" # https://r-graph-gallery.com/38-rcolorbrewers-palettes.html
+
+# Main variable name components
+## woDMFS1P_ - primary analysis without DMF/S1Ps being considered an hDMT
+## woDMF_ - secondary analysis with S1Ps being considered an hDMT
+## wo_ - secondary analysis with S1Ps+DMF being considered an hDMT
+## *_sens95_* - sensitivity analysis with 95% cutoff
+## *_sens80_* - sensitivity analysis with 80% cutoff
+## *_caliper_* - sensitivity analysis with broad caliper
+
+# Whether to apply pairwise censoring for follow-up
+PAIRWISE_CENSORING = TRUE
+
+# Reference strings
+ref_sup_qualitycontrol = "supplement S1"
+ref_sup_matchingplots = "supplement S2"
+ref_sup_country = "supplement S3"
+ref_sup_sensitivitytable = "supplement S4"
+```
+
+```{r reb, eval=rebuild_db}
+print("REBUILDING BASE TABLES")
+rmarkdown::render("1_screening.Rmd")
+rmarkdown::render("2_treatmentlinking.Rmd")
+```
+
+```{r, eval=rebuild_group}
+print("REBUILDING GROUPS")
+rmarkdown::render("3_treatmentselection.Rmd")
+```
+
+```{r, eval=rebuild_event}
+print("REBUILDING EVENT TABLES")
+rmarkdown::render("4_outcometables.Rmd")
+```
+
+```{r import-data}
+consort = readRDS("parts/consort_woDMFSIPFINPONOZA.Rda")
+
+# Primary analysis data (without DMF and S1P receptor modulators in hDMT group)
+woDMFS1P.data = readRDS("parts/patient_grouped_woDMFSIPFINPONOZA.Rda")
+woDMFS1P.relapse_events = readRDS("parts/relapse_events_woDMFSIPFINPONOZA.Rda")
+woDMFS1P.relapse_events = woDMFS1P.relapse_events[woDMFS1P.relapse_events$start != woDMFS1P.relapse_events$end,]
+woDMFS1P.relapse_events$start = as.numeric(woDMFS1P.relapse_events$start) / 365.25
+woDMFS1P.relapse_events$end = as.numeric(woDMFS1P.relapse_events$end) / 365.25
+woDMFS1P.relapse_events$outcome = as.numeric(woDMFS1P.relapse_events$outcome)
+woDMFS1P.sclesion_events = readRDS("parts/sclesion_events_woDMFSIPFINPONOZA.Rda")
+woDMFS1P.sclesion_events$start = as.numeric(woDMFS1P.sclesion_events$start) / 365.25
+woDMFS1P.sclesion_events$end = as.numeric(woDMFS1P.sclesion_events$end) / 365.25
+woDMFS1P.sclesion_events$outcome = as.numeric(woDMFS1P.sclesion_events$outcome)
+woDMFS1P.brainlesion_events = readRDS("parts/brainlesion_events_woDMFSIPFINPONOZA.Rda")
+woDMFS1P.brainlesion_events$start = as.numeric(woDMFS1P.brainlesion_events$start) / 365.25
+woDMFS1P.brainlesion_events$end = as.numeric(woDMFS1P.brainlesion_events$end) / 365.25
+woDMFS1P.brainlesion_events$outcome = as.numeric(woDMFS1P.brainlesion_events$outcome)
+
+# Secondary analysis data (with S1Ps in hDMT group)
+woDMF.data = readRDS("parts/patient_grouped_woDMF.Rda")
+woDMF.relapse_events = readRDS("parts/relapse_events_woDMF.Rda")
+woDMF.relapse_events = woDMF.relapse_events[woDMF.relapse_events$start != woDMF.relapse_events$end,]
+woDMF.relapse_events$start = as.numeric(woDMF.relapse_events$start) / 365.25
+woDMF.relapse_events$end = as.numeric(woDMF.relapse_events$end) / 365.25
+woDMF.relapse_events$outcome = as.numeric(woDMF.relapse_events$outcome)
+woDMF.sclesion_events = readRDS("parts/sclesion_events_woDMF.Rda")
+woDMF.sclesion_events$start = as.numeric(woDMF.sclesion_events$start) / 365.25
+woDMF.sclesion_events$end = as.numeric(woDMF.sclesion_events$end) / 365.25
+woDMF.sclesion_events$outcome = as.numeric(woDMF.sclesion_events$outcome)
+woDMF.brainlesion_events = readRDS("parts/brainlesion_events_woDMF.Rda")
+woDMF.brainlesion_events$start = as.numeric(woDMF.brainlesion_events$start) / 365.25
+woDMF.brainlesion_events$end = as.numeric(woDMF.brainlesion_events$end) / 365.25
+woDMF.brainlesion_events$outcome = as.numeric(woDMF.brainlesion_events$outcome)
+
+# Secondary analysis data (with DMF in hDMT group)
+wo.data = readRDS("parts/patient_grouped_wo.Rda")
+wo.relapse_events = readRDS("parts/relapse_events_wo.Rda")
+wo.relapse_events = wo.relapse_events[wo.relapse_events$start != wo.relapse_events$end,]
+wo.relapse_events$start = as.numeric(wo.relapse_events$start) / 365.25
+wo.relapse_events$end = as.numeric(wo.relapse_events$end) / 365.25
+wo.relapse_events$outcome = as.numeric(wo.relapse_events$outcome)
+wo.sclesion_events = readRDS("parts/sclesion_events_wo.Rda")
+wo.sclesion_events$start = as.numeric(wo.sclesion_events$start) / 365.25
+wo.sclesion_events$end = as.numeric(wo.sclesion_events$end) / 365.25
+wo.sclesion_events$outcome = as.numeric(wo.sclesion_events$outcome)
+wo.brainlesion_events = readRDS("parts/brainlesion_events_wo.Rda")
+wo.brainlesion_events$start = as.numeric(wo.brainlesion_events$start) / 365.25
+wo.brainlesion_events$end = as.numeric(wo.brainlesion_events$end) / 365.25
+wo.brainlesion_events$outcome = as.numeric(wo.brainlesion_events$outcome)
+
+# Sensitivity analysis data (95%)
+woDMFS1P_sens95.data = readRDS("parts/patient_grouped_woDMFSIPFINPONOZA_sens95.Rda")
+woDMFS1P_sens95.relapse_events = readRDS("parts/relapse_events_woDMFSIPFINPONOZA_sens95.Rda")
+woDMFS1P_sens95.relapse_events = woDMFS1P_sens95.relapse_events[woDMFS1P_sens95.relapse_events$start != woDMFS1P_sens95.relapse_events$end,]
+woDMFS1P_sens95.relapse_events$start = as.numeric(woDMFS1P_sens95.relapse_events$start) / 365.25
+woDMFS1P_sens95.relapse_events$end = as.numeric(woDMFS1P_sens95.relapse_events$end) / 365.25
+woDMFS1P_sens95.relapse_events$outcome = as.numeric(woDMFS1P_sens95.relapse_events$outcome)
+woDMFS1P_sens95.sclesion_events = readRDS("parts/sclesion_events_woDMFSIPFINPONOZA_sens95.Rda")
+woDMFS1P_sens95.sclesion_events$start = as.numeric(woDMFS1P_sens95.sclesion_events$start) / 365.25
+woDMFS1P_sens95.sclesion_events$end = as.numeric(woDMFS1P_sens95.sclesion_events$end) / 365.25
+woDMFS1P_sens95.sclesion_events$outcome = as.numeric(woDMFS1P_sens95.sclesion_events$outcome)
+woDMFS1P_sens95.brainlesion_events = readRDS("parts/brainlesion_events_woDMFSIPFINPONOZA_sens95.Rda")
+woDMFS1P_sens95.brainlesion_events$start = as.numeric(woDMFS1P_sens95.brainlesion_events$start) / 365.25
+woDMFS1P_sens95.brainlesion_events$end = as.numeric(woDMFS1P_sens95.brainlesion_events$end) / 365.25
+woDMFS1P_sens95.brainlesion_events$outcome = as.numeric(woDMFS1P_sens95.brainlesion_events$outcome)
+
+# Sensitivity analysis data (80%)
+woDMFS1P_sens80.data = readRDS("parts/patient_grouped_woDMFSIPFINPONOZA_sens80.Rda")
+woDMFS1P_sens80.relapse_events = readRDS("parts/relapse_events_woDMFSIPFINPONOZA_sens80.Rda")
+woDMFS1P_sens80.relapse_events = woDMFS1P_sens80.relapse_events[woDMFS1P_sens80.relapse_events$start != woDMFS1P_sens80.relapse_events$end,]
+woDMFS1P_sens80.relapse_events$start = as.numeric(woDMFS1P_sens80.relapse_events$start) / 365.25
+woDMFS1P_sens80.relapse_events$end = as.numeric(woDMFS1P_sens80.relapse_events$end) / 365.25
+woDMFS1P_sens80.relapse_events$outcome = as.numeric(woDMFS1P_sens80.relapse_events$outcome)
+woDMFS1P_sens80.sclesion_events = readRDS("parts/sclesion_events_woDMFSIPFINPONOZA_sens80.Rda")
+woDMFS1P_sens80.sclesion_events$start = as.numeric(woDMFS1P_sens80.sclesion_events$start) / 365.25
+woDMFS1P_sens80.sclesion_events$end = as.numeric(woDMFS1P_sens80.sclesion_events$end) / 365.25
+woDMFS1P_sens80.sclesion_events$outcome = as.numeric(woDMFS1P_sens80.sclesion_events$outcome)
+woDMFS1P_sens80.brainlesion_events = readRDS("parts/brainlesion_events_woDMFSIPFINPONOZA_sens80.Rda")
+woDMFS1P_sens80.brainlesion_events$start = as.numeric(woDMFS1P_sens80.brainlesion_events$start) / 365.25
+woDMFS1P_sens80.brainlesion_events$end = as.numeric(woDMFS1P_sens80.brainlesion_events$end) / 365.25
+woDMFS1P_sens80.brainlesion_events$outcome = as.numeric(woDMFS1P_sens80.brainlesion_events$outcome)
+```
+
+```{r matching}
+# Primary - Counts before exlusion of non-lDMT/hDMT group patients for the consort plot
+consort_woDMFS1P_preLDMT = nrow(woDMFS1P.data[woDMFS1P.data$GROUP == "lDMT",])
+consort_woDMFS1P_preMDMT = nrow(woDMFS1P.data[woDMFS1P.data$GROUP == "mDMT",])
+consort_woDMFS1P_preHDMT = nrow(woDMFS1P.data[woDMFS1P.data$GROUP == "hDMT",])
+
+# Drop patients not satisfying lDMT or hDMT group
+
+## In primary dataframe
+woDMFS1P.analysis_data = woDMFS1P.data[woDMFS1P.data$GROUP != "mDMT",]
+woDMFS1P.analysis_data$HIGH_GROUP = 0
+woDMFS1P.analysis_data[woDMFS1P.analysis_data$GROUP == "hDMT", "HIGH_GROUP"] = 1
+
+## In secondary dataframe, S1P included
+woDMF.analysis_data = woDMF.data[woDMF.data$GROUP != "mDMT",]
+woDMF.analysis_data$HIGH_GROUP = 0
+woDMF.analysis_data[woDMF.analysis_data$GROUP == "hDMT", "HIGH_GROUP"] = 1
+
+## In secondary dataframe, S1P and DMF included
+wo.analysis_data = wo.data[wo.data$GROUP != "mDMT",]
+wo.analysis_data$HIGH_GROUP = 0
+wo.analysis_data[wo.analysis_data$GROUP == "hDMT", "HIGH_GROUP"] = 1
+
+## In sensitivity analysis dataframes
+woDMFS1P_sens95.analysis_data = woDMFS1P_sens95.data[woDMFS1P_sens95.data$GROUP != "mDMT",]
+woDMFS1P_sens95.analysis_data$HIGH_GROUP = 0
+woDMFS1P_sens95.analysis_data[woDMFS1P_sens95.analysis_data$GROUP == "hDMT", "HIGH_GROUP"] = 1
+woDMFS1P_sens80.analysis_data = woDMFS1P_sens80.data[woDMFS1P_sens80.data$GROUP != "mDMT",]
+woDMFS1P_sens80.analysis_data$HIGH_GROUP = 0
+woDMFS1P_sens80.analysis_data[woDMFS1P_sens80.analysis_data$GROUP == "hDMT", "HIGH_GROUP"] = 1
+
+### Matching ###
+caliper <- 0.1
+ratio <- 3
+replace <- FALSE
+
+# Caliper/ratio for sensitivity analysis with broad caliper
+sensitivity_caliper <- 0.4
+sensitivity_ratio <- 10
+
+# Unmatched
+woDMFS1P.unmatched <- matchit(HIGH_GROUP ~ AGE_BASELINE + factor(GENDER) + DISEASE_DURATION + SC_MRI_LESIONCOUNT + RELAPSES_2Y + RELAPSES_1Y + factor(COUNTRY) + EDSS + factor(BRAIN_MRI_T2_LESIONCAT), data = woDMFS1P.analysis_data, method = NULL, distance = "glm")
+woDMF.unmatched <- matchit(HIGH_GROUP ~ AGE_BASELINE + factor(GENDER) + DISEASE_DURATION + SC_MRI_LESIONCOUNT + RELAPSES_2Y + RELAPSES_1Y + factor(COUNTRY) + EDSS + factor(BRAIN_MRI_T2_LESIONCAT), data = woDMF.analysis_data, method = NULL, distance = "glm")
+wo.unmatched <- matchit(HIGH_GROUP ~ AGE_BASELINE + factor(GENDER) + DISEASE_DURATION + SC_MRI_LESIONCOUNT + RELAPSES_2Y + RELAPSES_1Y + factor(COUNTRY) + EDSS + factor(BRAIN_MRI_T2_LESIONCAT), data = wo.analysis_data, method = NULL, distance = "glm")
+woDMFS1P_sens95.unmatched <- matchit(HIGH_GROUP ~ AGE_BASELINE + factor(GENDER) + DISEASE_DURATION + SC_MRI_LESIONCOUNT + RELAPSES_2Y + RELAPSES_1Y + factor(COUNTRY) + EDSS + factor(BRAIN_MRI_T2_LESIONCAT), data = woDMFS1P_sens95.analysis_data, method = NULL, distance = "glm")
+woDMFS1P_sens80.unmatched <- matchit(HIGH_GROUP ~ AGE_BASELINE + factor(GENDER) + DISEASE_DURATION + SC_MRI_LESIONCOUNT + RELAPSES_2Y + RELAPSES_1Y + factor(COUNTRY) + EDSS + factor(BRAIN_MRI_T2_LESIONCAT), data = woDMFS1P_sens80.analysis_data, method = NULL, distance = "glm")
+
+# Matching
+woDMFS1P.matched <- matchit(HIGH_GROUP ~ AGE_BASELINE + factor(GENDER) + DISEASE_DURATION + SC_MRI_LESIONCOUNT + RELAPSES_2Y + RELAPSES_1Y + factor(COUNTRY) + EDSS + factor(BRAIN_MRI_T2_LESIONCAT), data = woDMFS1P.analysis_data, method = "nearest", distance = "glm", ratio=ratio, min.controls=1, max.controls=ratio+1, caliper=caliper, replace=replace)
+
+woDMF.matched <- matchit(HIGH_GROUP ~ AGE_BASELINE + factor(GENDER) + DISEASE_DURATION + SC_MRI_LESIONCOUNT + RELAPSES_2Y + RELAPSES_1Y + factor(COUNTRY) + EDSS + factor(BRAIN_MRI_T2_LESIONCAT), data = woDMF.analysis_data, method = "nearest", distance = "glm", ratio=ratio, min.controls=1, max.controls=ratio+1, caliper=caliper, replace=replace)
+
+wo.matched <- matchit(HIGH_GROUP ~ AGE_BASELINE + factor(GENDER) + DISEASE_DURATION + SC_MRI_LESIONCOUNT + RELAPSES_2Y + RELAPSES_1Y + factor(COUNTRY) + EDSS + factor(BRAIN_MRI_T2_LESIONCAT), data = wo.analysis_data, method = "nearest", distance = "glm", ratio=ratio, min.controls=1, max.controls=ratio+1, caliper=caliper, replace=replace)
+
+woDMFS1P_sens95.matched <- matchit(HIGH_GROUP ~ AGE_BASELINE + factor(GENDER) + DISEASE_DURATION + SC_MRI_LESIONCOUNT + RELAPSES_2Y + RELAPSES_1Y + factor(COUNTRY) + EDSS + factor(BRAIN_MRI_T2_LESIONCAT), data = woDMFS1P_sens95.analysis_data, method = "nearest", distance = "glm", ratio=ratio, min.controls=1, max.controls=ratio+1, caliper=caliper, replace=replace)
+woDMFS1P_sens80.matched <- matchit(HIGH_GROUP ~ AGE_BASELINE + factor(GENDER) + DISEASE_DURATION + SC_MRI_LESIONCOUNT + RELAPSES_2Y + RELAPSES_1Y + factor(COUNTRY) + EDSS + factor(BRAIN_MRI_T2_LESIONCAT), data = woDMFS1P_sens80.analysis_data, method = "nearest", distance = "glm", ratio=ratio, min.controls=1, max.controls=ratio+1, caliper=caliper, replace=replace)
+woDMFS1P_sens_caliper.matched <- matchit(HIGH_GROUP ~ AGE_BASELINE + factor(GENDER) + DISEASE_DURATION + SC_MRI_LESIONCOUNT + RELAPSES_2Y + RELAPSES_1Y + factor(COUNTRY) + EDSS + factor(BRAIN_MRI_T2_LESIONCAT), data = woDMF.analysis_data, method = "nearest", distance = "glm", ratio=sensitivity_ratio, min.controls=1, max.controls=sensitivity_ratio+1, caliper=sensitivity_caliper, replace=replace)
+woDMFS1P_sens80_caliper.matched <- matchit(HIGH_GROUP ~ AGE_BASELINE + factor(GENDER) + DISEASE_DURATION + SC_MRI_LESIONCOUNT + RELAPSES_2Y + RELAPSES_1Y + factor(COUNTRY) + EDSS + factor(BRAIN_MRI_T2_LESIONCAT), data = woDMFS1P_sens80.analysis_data, method = "nearest", distance = "glm", ratio=sensitivity_ratio, min.controls=1, max.controls=sensitivity_ratio+1, caliper=sensitivity_caliper, replace=replace)
+
+
+woDMFS1P.matched_data = match.data(woDMFS1P.matched)
+woDMFS1P_sens_caliper.matched_data = match.data(woDMFS1P_sens_caliper.matched)
+woDMFS1P.unmatched_data = match.data(woDMFS1P.unmatched)
+woDMF.matched_data = match.data(woDMF.matched)
+woDMF.unmatched_data = match.data(woDMF.unmatched)
+wo.matched_data = match.data(wo.matched)
+wo.unmatched_data = match.data(wo.unmatched)
+woDMFS1P_sens95.matched_data = match.data(woDMFS1P_sens95.matched)
+woDMFS1P_sens95.unmatched_data = match.data(woDMFS1P_sens95.unmatched)
+woDMFS1P_sens80.matched_data = match.data(woDMFS1P_sens80.matched)
+woDMFS1P_sens80_caliper.matched_data = match.data(woDMFS1P_sens80_caliper.matched)
+woDMFS1P_sens80.unmatched_data = match.data(woDMFS1P_sens80.unmatched)
+
+woDMFS1P_consort_n_match_intervention = nrow(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 1,])
+woDMFS1P_consort_n_match_control = nrow(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 0,])
+woDMFS1P_consort_n_match_ex = nrow(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 0,])
+```
+
+::: fullcenter
+```{r consort-plot, echo=FALSE, fig.cap="Flowchart of screening, inclusion and matching of study population", class.source='fullcenter'}
+
+## Create CONSORT plot
+options(txt_gp = gpar(cex = 0.7))
+txt1 <- sprintf("Relapse-onset MS (n=%d)", consort[,'consort_n_RO'])
+txt1_side <- sprintf("Excluded (n=%d):\n\u2022 < 2 SC MRI available", consort[,'consort_n_RO']-consort[,'consort_n_2SC'])
+txt2 <- sprintf("Relapse-onset MS\n≥2 SC MRI, at least 6 months follow-up\n(n=%d)", consort[,'consort_n_2SC'])
+txt2_side <- sprintf("Excluded (n=%d):\n\u2022 No SC MRI at treatment initiation (n=%d)\n\u2022 Placebos/blinded trial medication (n=%d)\n\u2022 No baseline brain MRI / EDSS data (n=%d)", consort[,'consort_n_2SCtreatex']-consort[,'consort_n_hasstart']+consort[,'consort_n_2SC']-consort[,'consort_n_2SCtreatex']+consort[,'consort_ex_EDSSbrain'], consort[,'consort_n_2SCtreatex']-consort[,'consort_n_hasstart'], consort[,'consort_n_2SC']-consort[,'consort_n_2SCtreatex'], consort[,'consort_ex_EDSSbrain'])
+txt3 <- sprintf("Relapse-onset MS\n≥2 SC MRI, SC MRI at treatment start\n(n=%d)", consort[,'consort_n_hasstart']-consort[,'consort_ex_EDSSbrain'])
+txt_split <- sprintf(">90%% hDMT (n=%d);>90%% lDMT (n=%d);Excluded (n=%d)\n10%%<h/lDMT<90%%", consort_woDMFS1P_preHDMT, consort_woDMFS1P_preLDMT, consort[,'consort_n_hasstart']-consort[,'consort_ex_EDSSbrain']-consort_woDMFS1P_preHDMT-consort_woDMFS1P_preLDMT)
+txt_matched <- sprintf("Matched (n=%d);Matched (n=%d);Excluded", woDMFS1P_consort_n_match_intervention, woDMFS1P_consort_n_match_control)
+
+g <- add_box(txt = txt1, dist=0.04) |>
+  add_side_box(txt = txt1_side, dist=0.04) |>
+  add_box(txt = txt2, dist=0.04) |>
+  add_side_box(txt = txt2_side, dist=0.04) |>
+  add_box(txt = txt3, dist=0.04) |>
+  add_split(txt = strsplit(txt_split, ";")[[1]], coords=c(0.25,0.5,0.75), dist=0.04) |>
+  add_box(txt = strsplit(txt_matched, ";")[[1]], dist=0.04) |>
+  add_label_box(txt = c("1" = "Screening",
+                        "4" = "Unmatched",
+                        "5" = "Matched"))
+
+
+g <- change_label_color(g, 3, "#FFFFFF", plot_colors[[1]])
+plot(g)
+```
+:::
+
+```{r inline-results}
+woDMFS1P.matched_data_lesion_sum <- merge(x = woDMFS1P.sclesion_events %>% group_by(PATIENT_ID) %>% summarize_at(c('outcome'), sum), y = woDMFS1P.matched_data, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_median_hdmt_lesions <- median(woDMFS1P.matched_data_lesion_sum[woDMFS1P.matched_data_lesion_sum$HIGH_GROUP == 1, "outcome"])
+woDMFS1P_total_hdmt_lesions <- sum(woDMFS1P.matched_data_lesion_sum[woDMFS1P.matched_data_lesion_sum$HIGH_GROUP == 1, "outcome"])
+woDMFS1P_total_ldmt_lesions <- sum(woDMFS1P.matched_data_lesion_sum[woDMFS1P.matched_data_lesion_sum$HIGH_GROUP == 0, "outcome"])
+woDMFS1P_total_hdmt_lesions_pj <- sum(woDMFS1P.matched_data_lesion_sum[woDMFS1P.matched_data_lesion_sum$HIGH_GROUP == 1, "outcome"]) / sum(woDMFS1P.matched_data_lesion_sum[woDMFS1P.matched_data_lesion_sum$HIGH_GROUP == 1, "INCLUDED_FOLLOWUP"]/365.25)
+woDMFS1P_total_ldmt_lesions_pj <- sum(woDMFS1P.matched_data_lesion_sum[woDMFS1P.matched_data_lesion_sum$HIGH_GROUP == 0, "outcome"]) / sum(woDMFS1P.matched_data_lesion_sum[woDMFS1P.matched_data_lesion_sum$HIGH_GROUP == 0, "INCLUDED_FOLLOWUP"]/365.25)
+# Number of patients from matched hDMT-group with cord lesions
+woDMFS1P_total_high <- nrow(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 1,])
+woDMFS1P_baseline_cord_lesions_high <- nrow(woDMFS1P.matched_data[(woDMFS1P.matched_data$HIGH_GROUP == 1) & (woDMFS1P.matched_data$SC_MRI_LESIONCOUNT > 0),])
+woDMFS1P_baseline_cord_lesions_high_perc <- round(woDMFS1P_baseline_cord_lesions_high / woDMFS1P_total_high * 100, 1)
+
+# Number of patients from matched lDMT-group with cord lesions
+woDMFS1P_total_low <- nrow(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 0,])
+woDMFS1P_baseline_cord_lesions_low <- nrow(woDMFS1P.matched_data[(woDMFS1P.matched_data$HIGH_GROUP == 0) & (woDMFS1P.matched_data$SC_MRI_LESIONCOUNT > 0),])
+woDMFS1P_baseline_cord_lesions_low_perc <- round(woDMFS1P_baseline_cord_lesions_low / woDMFS1P_total_low * 100, 1)
+
+# Number of patients from complete matched cohort with cord lesions
+woDMFS1P_total <- nrow(woDMFS1P.matched_data)
+woDMFS1P_baseline_cord_lesions <- nrow(woDMFS1P.matched_data[(woDMFS1P.matched_data$SC_MRI_LESIONCOUNT > 0),])
+woDMFS1P_baseline_cord_lesions_perc <- round(woDMFS1P_baseline_cord_lesions / woDMFS1P_total * 100, 1)
+
+# Number of patients from complete unmatched cohort with cord lesions
+woDMFS1P_total_un <- nrow(woDMFS1P.analysis_data)
+woDMFS1P_baseline_cord_lesions_un <- nrow(woDMFS1P.analysis_data[(woDMFS1P.analysis_data$SC_MRI_LESIONCOUNT > 0),])
+woDMFS1P_baseline_cord_lesions_perc_un <- round(woDMFS1P_baseline_cord_lesions_un / woDMFS1P_total_un * 100, 1)
+
+# Median/IQR of follow-up time
+woDMFS1P_followup_time_median = round(median(woDMFS1P.matched_data$INCLUDED_FOLLOWUP/365.25), 1)
+woDMFS1P_followup_time_q1 = round(quantile(woDMFS1P.matched_data$INCLUDED_FOLLOWUP/365.25, 0.25), 1)
+woDMFS1P_followup_time_q3 = round(quantile(woDMFS1P.matched_data$INCLUDED_FOLLOWUP/365.25, 0.75), 1)
+woDMFS1P_followup_time_hDMT_median = round(median(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 1,]$INCLUDED_FOLLOWUP/365.25), 1)
+woDMFS1P_followup_time_hDMT_q1 = round(quantile(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 1,]$INCLUDED_FOLLOWUP/365.25, 0.25), 1)
+woDMFS1P_followup_time_hDMT_q3 = round(quantile(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 1,]$INCLUDED_FOLLOWUP/365.25, 0.75), 1)
+woDMFS1P_followup_time_lDMT_median = round(median(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 1,]$INCLUDED_FOLLOWUP/365.25), 1)
+woDMFS1P_followup_time_lDMT_q1 = round(quantile(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 1,]$INCLUDED_FOLLOWUP/365.25, 0.25), 1)
+woDMFS1P_followup_time_lDMT_q3 = round(quantile(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 1,]$INCLUDED_FOLLOWUP/365.25, 0.75), 1)
+```
+
+```{r table-one, tab.env="table", tab.cap="Patient characteristics of study groups before and after matching."}
+tableone.all <- data.frame(summary(woDMFS1P.matched)$sum.all) %>% mutate(across(where(is.numeric), ~ round(., 2)))
+tableone.matched <- data.frame(summary(woDMFS1P.matched)$sum.matched) %>% mutate(across(where(is.numeric), ~ round(., 2)))
+
+table1_pre <- generate_table1(woDMFS1P.matched, woDMFS1P.matched_data, woDMFS1P.unmatched_data)
+table_split <- tbl_split(table1_pre, variables = c("INCLUDED_FOLLOWUP", "COUNTRY"))
+table_split[[1]] %>% modify_table_styling(
+    columns = label,
+    rows = (label == "Follow-up in years"),
+    footnote = "Before pairwise censoring"
+  ) %>% as_flex_table()
+```
+
+```{r cox}
+
+# Function for pairwise censoring
+pairwise_censor = function (df){ # Input is outcome dataframe
+  # Assign end of last interval to end_followup column
+  tmp = df %>% group_by(PATIENT_ID) %>% mutate(end_followup = max(end))
+  tmp = tmp %>% drop_na(c(start, end))
+  # Create column containing the number of matches in the subclass
+  tmp = tmp %>% group_by(subclass) %>% mutate(n_matches = n_distinct(PATIENT_ID)-1)
+  # Create column containing the number of intervals for every subject
+  tmp = tmp %>% group_by(PATIENT_ID) %>% mutate(n_intervals = n())
+  
+  # Duplicate patient from HIGH_GROUP to match number of matched controls and adjust weight for treatment unit 1/n.
+  tmp_high = tmp[tmp$HIGH_GROUP == 1,]
+  dups_index = rep(1:nrow(tmp_high), tmp_high$n_matches)
+  tmp_high = tmp_high[dups_index,]
+  tmp_high = tmp_high %>% group_by(HIGH_GROUP, subclass, start) %>% mutate(pair_id = seq(n())) %>%  mutate(new_weights = weights / n()) %>% ungroup
+  tmp_low = tmp[tmp$HIGH_GROUP == 0,]
+  tmp_low = tmp_low %>% group_by(HIGH_GROUP, subclass) %>%  mutate(pair_id = rep(seq(n_distinct(PATIENT_ID)), rle(PATIENT_ID)$lengths)) %>% ungroup
+  tmp_paired = bind_rows(tmp_low, tmp_high)
+  tmp_paired[is.na(tmp_paired$new_weights), "new_weights"] = tmp_paired[is.na(tmp_paired$new_weights), "weights"]
+  
+  # Determine shortest follow-up per pair
+  tmp_paired = tmp_paired %>% group_by(subclass, pair_id) %>% mutate(shortest_followup = min(end_followup))
+  
+  # Adjust intervals to match within pairs
+  tmp_paired$include = TRUE
+  tmp_paired$flipped = FALSE
+  tmp_paired[(tmp_paired$end > tmp_paired$shortest_followup) & (tmp_paired$start > tmp_paired$shortest_followup), "include"] = FALSE
+  tmp_paired[(tmp_paired$end > tmp_paired$shortest_followup) & (tmp_paired$start <= tmp_paired$shortest_followup), "flipped"] = TRUE
+  tmp_paired[(tmp_paired$end > tmp_paired$shortest_followup) & (tmp_paired$start <= tmp_paired$shortest_followup), "outcome"] = 0
+  tmp_paired[(tmp_paired$end > tmp_paired$shortest_followup) & (tmp_paired$start <= tmp_paired$shortest_followup), "end"] = tmp_paired[(tmp_paired$end > tmp_paired$shortest_followup) & (tmp_paired$start <= tmp_paired$shortest_followup), "shortest_followup"]
+  tmp_paired_filtered <- tmp_paired[tmp_paired$include == TRUE,]
+  tmp_paired_filtered$UPAIR_ID = paste(tmp_paired_filtered$PATIENT_ID, tmp_paired_filtered$pair_id, sep='_')
+  return(tmp_paired_filtered);
+}
+
+# Merge patient data tables with event tables
+woDMFS1P_matched <- match.data(woDMFS1P.matched)
+woDMFS1P.merged <- merge(x = woDMFS1P.sclesion_events, y = woDMFS1P_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P.merged_relapse <- merge(x = woDMFS1P.relapse_events, y = woDMFS1P_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P.merged_brainlesion <- merge(x = woDMFS1P.brainlesion_events, y = woDMFS1P_matched, by = "PATIENT_ID", all.y = TRUE)
+  
+woDMF_matched <- match.data(woDMF.matched)
+woDMF.merged <- merge(x = woDMF.sclesion_events, y = woDMF_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMF.merged_relapse <- merge(x = woDMF.relapse_events, y = woDMF_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMF.merged_brainlesion <- merge(x = woDMF.brainlesion_events, y = woDMF_matched, by = "PATIENT_ID", all.y = TRUE)
+
+matched <- match.data(wo.matched)
+wo.merged <- merge(x = wo.sclesion_events, y = matched, by = "PATIENT_ID", all.y = TRUE)
+wo.merged_relapse <- merge(x = wo.relapse_events, y = matched, by = "PATIENT_ID", all.y = TRUE)
+wo.merged_brainlesion <- merge(x = wo.brainlesion_events, y = matched, by = "PATIENT_ID", all.y = TRUE)
+
+woDMFS1P_sens95_matched <- match.data(woDMFS1P_sens95.matched)
+woDMFS1P_sens95.merged <- merge(x = woDMFS1P_sens95.sclesion_events, y = woDMFS1P_sens95_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_sens95.merged_relapse <- merge(x = woDMFS1P_sens95.relapse_events, y = woDMFS1P_sens95_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_sens95.merged_brainlesion <- merge(x = woDMFS1P_sens95.brainlesion_events, y = woDMFS1P_sens95_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_sens80_matched <- match.data(woDMFS1P_sens80.matched)
+woDMFS1P_sens80.merged <- merge(x = woDMFS1P_sens80.sclesion_events, y = woDMFS1P_sens80_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_sens80.merged_relapse <- merge(x = woDMFS1P_sens80.relapse_events, y = woDMFS1P_sens80_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_sens80.merged_brainlesion <- merge(x = woDMFS1P_sens80.brainlesion_events, y = woDMFS1P_sens80_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_sens_caliper_matched <- match.data(woDMFS1P_sens_caliper.matched)
+woDMFS1P_sens_caliper.merged <- merge(x = woDMFS1P.sclesion_events, y = woDMFS1P_sens_caliper_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_sens_caliper.merged_relapse <- merge(x = woDMFS1P.relapse_events, y = woDMFS1P_sens_caliper_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_sens_caliper.merged_brainlesion <- merge(x = woDMFS1P.brainlesion_events, y = woDMFS1P_sens_caliper_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_sens80_caliper_matched <- match.data(woDMFS1P_sens80_caliper.matched)
+woDMFS1P_sens80_caliper.merged <- merge(x = woDMFS1P_sens80.sclesion_events, y = woDMFS1P_sens80_caliper_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_sens80_caliper.merged_relapse <- merge(x = woDMFS1P_sens80.relapse_events, y = woDMFS1P_sens80_caliper_matched, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_sens80_caliper.merged_brainlesion <- merge(x = woDMFS1P_sens80.brainlesion_events, y = woDMFS1P_sens80_caliper_matched, by = "PATIENT_ID", all.y = TRUE)
+
+# Pairwise-censoring
+if(PAIRWISE_CENSORING == TRUE){
+  tmp = pairwise_censor(woDMFS1P.merged)
+  # Validate pairwise-censoring for main dataframe
+  ends_low = aggregate(tmp[tmp$HIGH_GROUP == 0, 'end'], tmp[tmp$HIGH_GROUP == 0, 'UPAIR_ID'], FUN = max)$end
+  weights_low = aggregate(tmp[tmp$HIGH_GROUP == 0, 'new_weights'], tmp[tmp$HIGH_GROUP == 0, 'UPAIR_ID'], FUN = max)$new_weights
+  ends_high = aggregate(tmp[tmp$HIGH_GROUP == 1, 'end'], tmp[tmp$HIGH_GROUP == 1, 'UPAIR_ID'], FUN = max)$end
+  weights_high = aggregate(tmp[tmp$HIGH_GROUP == 1, 'new_weights'], tmp[tmp$HIGH_GROUP == 1, 'UPAIR_ID'], FUN = max)$new_weights
+  
+  high_followup_total = sum(ends_low * weights_low) / sum(weights_low)
+  low_followup_total = sum(ends_high * weights_high) / sum(weights_high)
+  stopifnot((high_followup_total - low_followup_total) < 0.001)
+  sprintf("Mean follow-up duration is %.2f years", high_followup_total)
+  mean_pairwise_followup = high_followup_total
+  std_pairwise_followup = sqrt(wtd.var(ends_high, weights_high))
+  min_pairwise_followup = round(min(ends_high),2)
+  max_pairwise_followup = round(max(ends_high),2)
+  
+  woDMFS1P.merged = tmp
+  woDMFS1P.merged_relapse = pairwise_censor(woDMFS1P.merged_relapse)
+  woDMFS1P.merged_brainlesion = pairwise_censor(woDMFS1P.merged_brainlesion)
+  woDMF.merged = pairwise_censor(woDMF.merged)
+  woDMF.merged_relapse = pairwise_censor(woDMF.merged_relapse)
+  woDMF.merged_brainlesion = pairwise_censor(woDMF.merged_brainlesion)
+  wo.merged = pairwise_censor(wo.merged)
+  wo.merged_relapse = pairwise_censor(wo.merged_relapse)
+  wo.merged_brainlesion = pairwise_censor(wo.merged_brainlesion)
+  woDMFS1P_sens80.merged = pairwise_censor(woDMFS1P_sens80.merged)
+  woDMFS1P_sens80.merged_relapse = pairwise_censor(woDMFS1P_sens80.merged_relapse)
+  woDMFS1P_sens80.merged_brainlesion = pairwise_censor(woDMFS1P_sens80.merged_brainlesion)
+  woDMFS1P_sens95.merged = pairwise_censor(woDMFS1P_sens95.merged)
+  woDMFS1P_sens95.merged_relapse = pairwise_censor(woDMFS1P_sens95.merged_relapse)
+  woDMFS1P_sens95.merged_brainlesion = pairwise_censor(woDMFS1P_sens95.merged_brainlesion)
+  woDMFS1P_sens_caliper.merged = pairwise_censor(woDMFS1P_sens_caliper.merged)
+  woDMFS1P_sens_caliper.merged_relapse = pairwise_censor(woDMFS1P_sens_caliper.merged_relapse)
+  woDMFS1P_sens_caliper.merged_brainlesion = pairwise_censor(woDMFS1P_sens_caliper.merged_brainlesion)
+  woDMFS1P_sens80_caliper.merged = pairwise_censor(woDMFS1P_sens80_caliper.merged)
+  woDMFS1P_sens80_caliper.merged_relapse = pairwise_censor(woDMFS1P_sens80_caliper.merged_relapse)
+  woDMFS1P_sens80_caliper.merged_brainlesion = pairwise_censor(woDMFS1P_sens80_caliper.merged_brainlesion)
+}
+
+# Cox regression
+
+# Primary #
+woDMFS1P_sv_fit.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P.merged, id=UPAIR_ID, weights=woDMFS1P.merged$new_weights)
+#summary(woDMFS1P_sv_fit.cox_adjusted_matched)
+woDMFS1P_results.exp <- exp(summary(woDMFS1P_sv_fit.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_results.ci95_lb <- exp(confint(woDMFS1P_sv_fit.cox_adjusted_matched))[1]
+woDMFS1P_results.ci95_ub <- exp(confint(woDMFS1P_sv_fit.cox_adjusted_matched))[2]
+woDMFS1P_results.p <- summary(woDMFS1P_sv_fit.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sv_fit_relapse.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P.merged_relapse, id=UPAIR_ID, weights=woDMFS1P.merged_relapse$new_weights)
+#summary(woDMFS1P_sv_fit_relapse.cox_adjusted_matched)
+woDMFS1P_relapse_results.exp <- exp(summary(woDMFS1P_sv_fit_relapse.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_relapse_results.ci95_lb <- exp(confint(woDMFS1P_sv_fit_relapse.cox_adjusted_matched))[1]
+woDMFS1P_relapse_results.ci95_ub <- exp(confint(woDMFS1P_sv_fit_relapse.cox_adjusted_matched))[2]
+woDMFS1P_relapse_results.p <- summary(woDMFS1P_sv_fit_relapse.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sv_fit_brainlesion.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P.merged_brainlesion, id=UPAIR_ID, weights=woDMFS1P.merged_brainlesion$new_weights)
+#summary(woDMFS1P_sv_fit_brainlesion.cox_adjusted_matched)
+woDMFS1P_brainlesion_results.exp <- exp(summary(woDMFS1P_sv_fit_brainlesion.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_brainlesion_results.ci95_lb <- exp(confint(woDMFS1P_sv_fit_brainlesion.cox_adjusted_matched))[1]
+woDMFS1P_brainlesion_results.ci95_ub <- exp(confint(woDMFS1P_sv_fit_brainlesion.cox_adjusted_matched))[2]
+woDMFS1P_brainlesion_results.p <- summary(woDMFS1P_sv_fit_brainlesion.cox_adjusted_matched)$coefficients[, 6][1]
+
+# Secondary #
+sv_fit.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=wo.merged, id=UPAIR_ID, weights=wo.merged$new_weights)
+#summary(sv_fit.cox_adjusted_matched)
+results.exp <- exp(summary(sv_fit.cox_adjusted_matched)$coefficients[1])
+results.ci95_lb <- exp(confint(sv_fit.cox_adjusted_matched))[1]
+results.ci95_ub <- exp(confint(sv_fit.cox_adjusted_matched))[2]
+results.p <- summary(sv_fit.cox_adjusted_matched)$coefficients[, 6][1]
+
+sv_fit_relapse.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=wo.merged_relapse, id=UPAIR_ID, weights=wo.merged_relapse$new_weights)
+#summary(sv_fit_relapse.cox_adjusted_matched)
+relapse_results.exp <- exp(summary(sv_fit_relapse.cox_adjusted_matched)$coefficients[1])
+relapse_results.ci95_lb <- exp(confint(sv_fit_relapse.cox_adjusted_matched))[1]
+relapse_results.ci95_ub <- exp(confint(sv_fit_relapse.cox_adjusted_matched))[2]
+relapse_results.p <- summary(sv_fit_relapse.cox_adjusted_matched)$coefficients[, 6][1]
+
+sv_fit_brainlesion.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=wo.merged_brainlesion, id=UPAIR_ID, weights=wo.merged_brainlesion$new_weights)
+#summary(sv_fit_brainlesion.cox_adjusted_matched)
+brainlesion_results.exp <- exp(summary(sv_fit_brainlesion.cox_adjusted_matched)$coefficients[1])
+brainlesion_results.ci95_lb <- exp(confint(sv_fit_brainlesion.cox_adjusted_matched))[1]
+brainlesion_results.ci95_ub <- exp(confint(sv_fit_brainlesion.cox_adjusted_matched))[2]
+brainlesion_results.p <- summary(sv_fit_brainlesion.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMF_sv_fit.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMF.merged, id=UPAIR_ID, weights=woDMF.merged$new_weights)
+#summary(woDMF_sv_fit.cox_adjusted_matched)
+woDMF_results.exp <- exp(summary(woDMF_sv_fit.cox_adjusted_matched)$coefficients[1])
+woDMF_results.ci95_lb <- exp(confint(woDMF_sv_fit.cox_adjusted_matched))[1]
+woDMF_results.ci95_ub <- exp(confint(woDMF_sv_fit.cox_adjusted_matched))[2]
+woDMF_results.p <- summary(woDMF_sv_fit.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMF_sv_fit_relapse.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMF.merged_relapse, id=UPAIR_ID, weights=woDMF.merged_relapse$new_weights)
+#summary(woDMF_sv_fit_relapse.cox_adjusted_matched)
+woDMF_relapse_results.exp <- exp(summary(woDMF_sv_fit_relapse.cox_adjusted_matched)$coefficients[1])
+woDMF_relapse_results.ci95_lb <- exp(confint(woDMF_sv_fit_relapse.cox_adjusted_matched))[1]
+woDMF_relapse_results.ci95_ub <- exp(confint(woDMF_sv_fit_relapse.cox_adjusted_matched))[2]
+woDMF_relapse_results.p <- summary(woDMF_sv_fit_relapse.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMF_sv_fit_brainlesion.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMF.merged_brainlesion, id=UPAIR_ID, weights=woDMF.merged_brainlesion$new_weights)
+#summary(woDMF_sv_fit_brainlesion.cox_adjusted_matched)
+woDMF_brainlesion_results.exp <- exp(summary(woDMF_sv_fit_brainlesion.cox_adjusted_matched)$coefficients[1])
+woDMF_brainlesion_results.ci95_lb <- exp(confint(woDMF_sv_fit_brainlesion.cox_adjusted_matched))[1]
+woDMF_brainlesion_results.ci95_ub <- exp(confint(woDMF_sv_fit_brainlesion.cox_adjusted_matched))[2]
+woDMF_brainlesion_results.p <- summary(woDMF_sv_fit_brainlesion.cox_adjusted_matched)$coefficients[, 6][1]
+
+# Sensitivity #
+
+woDMFS1P_sens95_sv_fit.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P_sens95.merged, id=UPAIR_ID, weights=woDMFS1P_sens95.merged$new_weights)
+#summary(woDMFS1P_sens95_sv_fit.cox_adjusted_matched)
+woDMFS1P_sens95_results.exp <- exp(summary(woDMFS1P_sens95_sv_fit.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_sens95_results.ci95_lb <- exp(confint(woDMFS1P_sens95_sv_fit.cox_adjusted_matched))[1]
+woDMFS1P_sens95_results.ci95_ub <- exp(confint(woDMFS1P_sens95_sv_fit.cox_adjusted_matched))[2]
+woDMFS1P_sens95_results.p <- summary(woDMFS1P_sens95_sv_fit.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sens95_sv_fit_relapse.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P_sens95.merged_relapse, id=UPAIR_ID, weights=woDMFS1P_sens95.merged_relapse$new_weights)
+#summary(woDMFS1P_sens95_sv_fit_relapse.cox_adjusted_matched)
+woDMFS1P_sens95_relapse_results.exp <- exp(summary(woDMFS1P_sens95_sv_fit_relapse.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_sens95_relapse_results.ci95_lb <- exp(confint(woDMFS1P_sens95_sv_fit_relapse.cox_adjusted_matched))[1]
+woDMFS1P_sens95_relapse_results.ci95_ub <- exp(confint(woDMFS1P_sens95_sv_fit_relapse.cox_adjusted_matched))[2]
+woDMFS1P_sens95_relapse_results.p <- summary(woDMFS1P_sens95_sv_fit_relapse.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sens95_sv_fit_brainlesion.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P_sens95.merged_brainlesion, id=UPAIR_ID, weights=woDMFS1P_sens95.merged_brainlesion$new_weights)
+#summary(woDMFS1P_sens95_sv_fit_brainlesion.cox_adjusted_matched)
+woDMFS1P_sens95_brainlesion_results.exp <- exp(summary(woDMFS1P_sens95_sv_fit_brainlesion.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_sens95_brainlesion_results.ci95_lb <- exp(confint(woDMFS1P_sens95_sv_fit_brainlesion.cox_adjusted_matched))[1]
+woDMFS1P_sens95_brainlesion_results.ci95_ub <- exp(confint(woDMFS1P_sens95_sv_fit_brainlesion.cox_adjusted_matched))[2]
+woDMFS1P_sens95_brainlesion_results.p <- summary(woDMFS1P_sens95_sv_fit_brainlesion.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sens80_sv_fit.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P_sens80.merged, id=UPAIR_ID, weights=woDMFS1P_sens80.merged$new_weights)
+#summary(woDMFS1P_sens80_sv_fit.cox_adjusted_matched)
+woDMFS1P_sens80_results.exp <- exp(summary(woDMFS1P_sens80_sv_fit.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_sens80_results.ci95_lb <- exp(confint(woDMFS1P_sens80_sv_fit.cox_adjusted_matched))[1]
+woDMFS1P_sens80_results.ci95_ub <- exp(confint(woDMFS1P_sens80_sv_fit.cox_adjusted_matched))[2]
+woDMFS1P_sens80_results.p <- summary(woDMFS1P_sens80_sv_fit.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sens80_sv_fit_relapse.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P_sens80.merged_relapse, id=UPAIR_ID, weights=woDMFS1P_sens80.merged_relapse$new_weights)
+#summary(woDMFS1P_sens80_sv_fit_relapse.cox_adjusted_matched)
+woDMFS1P_sens80_relapse_results.exp <- exp(summary(woDMFS1P_sens80_sv_fit_relapse.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_sens80_relapse_results.ci95_lb <- exp(confint(woDMFS1P_sens80_sv_fit_relapse.cox_adjusted_matched))[1]
+woDMFS1P_sens80_relapse_results.ci95_ub <- exp(confint(woDMFS1P_sens80_sv_fit_relapse.cox_adjusted_matched))[2]
+woDMFS1P_sens80_relapse_results.p <- summary(woDMFS1P_sens80_sv_fit_relapse.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sens80_sv_fit_brainlesion.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P_sens80.merged_brainlesion, id=UPAIR_ID, weights=woDMFS1P_sens80.merged_brainlesion$new_weights)
+#summary(woDMFS1P_sens80_sv_fit_brainlesion.cox_adjusted_matched)
+woDMFS1P_sens80_brainlesion_results.exp <- exp(summary(woDMFS1P_sens80_sv_fit_brainlesion.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_sens80_brainlesion_results.ci95_lb <- exp(confint(woDMFS1P_sens80_sv_fit_brainlesion.cox_adjusted_matched))[1]
+woDMFS1P_sens80_brainlesion_results.ci95_ub <- exp(confint(woDMFS1P_sens80_sv_fit_brainlesion.cox_adjusted_matched))[2]
+woDMFS1P_sens80_brainlesion_results.p <- summary(woDMFS1P_sens80_sv_fit_brainlesion.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sens_caliper_sv_fit.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P_sens_caliper.merged, id=UPAIR_ID, weights=woDMFS1P_sens_caliper.merged$new_weights)
+#summary(woDMFS1P_sens_caliper_sv_fit.cox_adjusted_matched)
+woDMFS1P_sens_caliper_results.exp <- exp(summary(woDMFS1P_sens_caliper_sv_fit.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_sens_caliper_results.ci95_lb <- exp(confint(woDMFS1P_sens_caliper_sv_fit.cox_adjusted_matched))[1]
+woDMFS1P_sens_caliper_results.ci95_ub <- exp(confint(woDMFS1P_sens_caliper_sv_fit.cox_adjusted_matched))[2]
+woDMFS1P_sens_caliper_results.p <- summary(woDMFS1P_sens_caliper_sv_fit.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sens_caliper_sv_fit_relapse.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P_sens_caliper.merged_relapse, id=UPAIR_ID, weights=woDMFS1P_sens_caliper.merged_relapse$new_weights)
+#summary(woDMFS1P_sens_caliper_sv_fit_relapse.cox_adjusted_matched)
+woDMFS1P_sens_caliper_relapse_results.exp <- exp(summary(woDMFS1P_sens_caliper_sv_fit_relapse.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_sens_caliper_relapse_results.ci95_lb <- exp(confint(woDMFS1P_sens_caliper_sv_fit_relapse.cox_adjusted_matched))[1]
+woDMFS1P_sens_caliper_relapse_results.ci95_ub <- exp(confint(woDMFS1P_sens_caliper_sv_fit_relapse.cox_adjusted_matched))[2]
+woDMFS1P_sens_caliper_relapse_results.p <- summary(woDMFS1P_sens_caliper_sv_fit_relapse.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sens_caliper_sv_fit_brainlesion.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P_sens_caliper.merged_brainlesion, id=UPAIR_ID, weights=woDMFS1P_sens_caliper.merged_brainlesion$new_weights)
+#summary(woDMFS1P_sens_caliper_sv_fit_brainlesion.cox_adjusted_matched)
+woDMFS1P_sens_caliper_brainlesion_results.exp <- exp(summary(woDMFS1P_sens_caliper_sv_fit_brainlesion.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_sens_caliper_brainlesion_results.ci95_lb <- exp(confint(woDMFS1P_sens_caliper_sv_fit_brainlesion.cox_adjusted_matched))[1]
+woDMFS1P_sens_caliper_brainlesion_results.ci95_ub <- exp(confint(woDMFS1P_sens_caliper_sv_fit_brainlesion.cox_adjusted_matched))[2]
+woDMFS1P_sens_caliper_brainlesion_results.p <- summary(woDMFS1P_sens_caliper_sv_fit_brainlesion.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sens80_caliper_sv_fit.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P_sens80_caliper.merged, id=UPAIR_ID, weights=woDMFS1P_sens80_caliper.merged$new_weights)
+#summary(woDMFS1P_sens80_caliper_sv_fit.cox_adjusted_matched)
+woDMFS1P_sens80_caliper_results.exp <- exp(summary(woDMFS1P_sens80_caliper_sv_fit.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_sens80_caliper_results.ci95_lb <- exp(confint(woDMFS1P_sens80_caliper_sv_fit.cox_adjusted_matched))[1]
+woDMFS1P_sens80_caliper_results.ci95_ub <- exp(confint(woDMFS1P_sens80_caliper_sv_fit.cox_adjusted_matched))[2]
+woDMFS1P_sens80_caliper_results.p <- summary(woDMFS1P_sens80_caliper_sv_fit.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sens80_caliper_sv_fit_relapse.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P_sens80_caliper.merged_relapse, id=UPAIR_ID, weights=woDMFS1P_sens80_caliper.merged_relapse$new_weights)
+#summary(woDMFS1P_sens80_caliper_sv_fit_relapse.cox_adjusted_matched)
+woDMFS1P_sens80_caliper_relapse_results.exp <- exp(summary(woDMFS1P_sens80_caliper_sv_fit_relapse.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_sens80_caliper_relapse_results.ci95_lb <- exp(confint(woDMFS1P_sens80_caliper_sv_fit_relapse.cox_adjusted_matched))[1]
+woDMFS1P_sens80_caliper_relapse_results.ci95_ub <- exp(confint(woDMFS1P_sens80_caliper_sv_fit_relapse.cox_adjusted_matched))[2]
+woDMFS1P_sens80_caliper_relapse_results.p <- summary(woDMFS1P_sens80_caliper_sv_fit_relapse.cox_adjusted_matched)$coefficients[, 6][1]
+
+woDMFS1P_sens80_caliper_sv_fit_brainlesion.cox_adjusted_matched <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=woDMFS1P_sens80_caliper.merged_brainlesion, id=UPAIR_ID, weights=woDMFS1P_sens80_caliper.merged_brainlesion$new_weights)
+#summary(woDMFS1P_sens80_caliper_sv_fit_brainlesion.cox_adjusted_matched)
+woDMFS1P_sens80_caliper_brainlesion_results.exp <- exp(summary(woDMFS1P_sens80_caliper_sv_fit_brainlesion.cox_adjusted_matched)$coefficients[1])
+woDMFS1P_sens80_caliper_brainlesion_results.ci95_lb <- exp(confint(woDMFS1P_sens80_caliper_sv_fit_brainlesion.cox_adjusted_matched))[1]
+woDMFS1P_sens80_caliper_brainlesion_results.ci95_ub <- exp(confint(woDMFS1P_sens80_caliper_sv_fit_brainlesion.cox_adjusted_matched))[2]
+woDMFS1P_sens80_caliper_brainlesion_results.p <- summary(woDMFS1P_sens80_caliper_sv_fit_brainlesion.cox_adjusted_matched)$coefficients[, 6][1]
+
+# Adjust p-values for multiple testing
+adjusted_p = p.adjust(c(woDMFS1P_results.p, woDMFS1P_relapse_results.p, woDMFS1P_brainlesion_results.p, woDMF_results.p, woDMF_relapse_results.p, woDMF_brainlesion_results.p, results.p, relapse_results.p, brainlesion_results.p, woDMFS1P_sens80_results.p, woDMFS1P_sens80_relapse_results.p, woDMFS1P_sens80_brainlesion_results.p, woDMFS1P_sens95_results.p, woDMFS1P_sens95_relapse_results.p, woDMFS1P_sens95_brainlesion_results.p, woDMFS1P_sens_caliper_results.p, woDMFS1P_sens_caliper_relapse_results.p, woDMFS1P_sens_caliper_brainlesion_results.p, woDMFS1P_sens80_caliper_results.p, woDMFS1P_sens80_caliper_relapse_results.p, woDMFS1P_sens80_caliper_brainlesion_results.p), method="BH")
+
+```
+
+```{r simul, include=FALSE}
+set.seed(1337)
+
+# Simulation function for MDE calculation
+simul <- function(data, n, orig_analysis_data, outcome_table){
+  j = 0
+  results_p = c()
+  results_hr = c()
+  
+  orig_n_high = n_distinct(orig_analysis_data[orig_analysis_data$HIGH_GROUP == 1, "PATIENT_ID"])
+  orig_n_low = n_distinct(orig_analysis_data[orig_analysis_data$HIGH_GROUP == 0, "PATIENT_ID"])
+  high_patients = data[data$HIGH_GROUP == 1,]
+  low_patients = data[data$HIGH_GROUP == 0,]
+  
+  # Check if in last set of n simulations 1-beta >0.8
+  while((j == 0) | (sum(tail(results_p,n))/n < 0.8)){
+    print(paste("Currently ", sum(tail(results_p,n))/n, sep=" "))
+    for (i in 1:n) {
+      #print(i)
+      
+      # Sample groups of same size from original dataset
+      sample_index = sample(nrow(high_patients), orig_n_high, replace=TRUE)
+      sim_high_group = high_patients[sample_index,]
+      
+      sample_index = sample(nrow(low_patients), orig_n_low, replace=TRUE)
+      sim_low_group = low_patients[sample_index,]
+      simul_data = bind_rows(sim_low_group, sim_high_group)
+      
+      # Merge with outcome table
+      simul_data[order(simul_data$HIGH_GROUP), c("subclass", "weights")] = orig_analysis_data[order(orig_analysis_data$HIGH_GROUP), c("subclass", "weights")]
+      simul_data.merged <- merge(x = outcome_table, y = simul_data, by = "PATIENT_ID", all.y = TRUE)
+      simul_data.merged = pairwise_censor(simul_data.merged)
+      
+      # Increase difference between groups based
+      simul_data.merged[sample(which(simul_data.merged$HIGH_GROUP == 0), j), "outcome"] = 1
+      simul_data.merged[sample(which(simul_data.merged$HIGH_GROUP == 1), j), "outcome"] = 0
+      
+      # Run Cox regression
+      surv_fit <- coxph(Surv(start, end, outcome) ~ HIGH_GROUP, data=simul_data.merged, id=UPAIR_ID, weights=simul_data.merged$new_weights)
+      
+      # Extract data
+      summary <- summary(surv_fit)
+      exp <- exp(summary$coefficients[1])
+      ci95_lb <- exp(confint(surv_fit))[1]
+      ci95_ub <- exp(confint(surv_fit))[2]
+      p <- summary$coefficients[, 6][1]
+      results_p <- append(results_p, as.numeric(p <= 0.05))
+      results_hr <- append(results_hr, abs(1-exp)*100)
+    }
+    j = j + 1
+  }
+  results = data.frame(results_p, results_hr)
+  return(results)
+}
+
+# Load saved simulation data if already available
+if(file.exists("parts/simul_main.Rda")){
+  main_simul = readRDS("parts/simul_main.Rda")
+}else{
+  # Run simulations
+  main_simul = simul(woDMFS1P.analysis_data, 200, woDMFS1P.matched_data, woDMFS1P.sclesion_events)
+  saveRDS(main_simul, "parts/simul_main.Rda")
+}
+
+results = main_simul
+results$bin = as.numeric(cut(results$results_hr, breaks = 1:120))
+
+a <- aggregate(results$results_p, list(results$bin), FUN=mean)
+model = nls(x ~ SSlogis(Group.1, a, b, c), data = a)
+
+fit_function = function(x){ predict(model, newdata=data.frame(Group.1 = x)) }
+power_threshold = function(x) 0.8
+main_mde = uniroot(function(x) fit_function(x) - power_threshold(x), c(0,100))$root
+
+ggplot(a, 
+     aes(x = Group.1, y = x)) + 
+geom_function(fun=fit_function, color="red") +
+geom_line() +
+geom_hline(aes(yintercept = .8), linetype = 'dashed') + 
+geom_vline(xintercept = main_mde, linetype = 'dashed') + 
+theme_minimal()+
+scale_y_continuous(labels = scales::percent) + 
+labs(x = '% diff', y = 'Power')
+  
+```
+
+::: fullcenter
+```{r treatment-pies-prim, fig.cap=paste("DMT usage during follow-up as proportion of follow-up time. (A) Matched patients hDMT and lDMT group. (B) Patients from lDMT and hDMT group with new cord lesions during follow-up.", string_format_treatment_list(NULL, NULL, TRUE),". * = ", string_format_treatment_list(high_other_therapies, woDMFS1P.hdmt_treatmentduration, 0), " for the hDMT-group. In the control group: ", string_format_treatment_list(low_other_therapies, woDMFS1P.ldmt_treatmentduration, 0), ". In the subgroup with new cord lesions in the control group:", string_format_treatment_list(low_other_therapies_lesion, sum(woDMFS1P.ldmt_treatmentduration_lesion), 0), ".")}
+
+woDMFS1P.hdmt_treatments = woDMFS1P.matched_data[woDMFS1P.matched_data$GROUP == "hDMT", "TREATMENT_DICT"]
+n_high = length(woDMFS1P.hdmt_treatments)
+woDMFS1P.ldmt_treatments = woDMFS1P.matched_data[woDMFS1P.matched_data$GROUP == "lDMT", "TREATMENT_DICT"]
+n_low = length(woDMFS1P.ldmt_treatments)
+woDMFS1P.hdmt_treatmentduration = sum(woDMFS1P.matched_data[woDMFS1P.matched_data$GROUP == "hDMT", "INCLUDED_FOLLOWUP"])
+woDMFS1P.ldmt_treatmentduration = sum(woDMFS1P.matched_data[woDMFS1P.matched_data$GROUP == "lDMT", "INCLUDED_FOLLOWUP"])
+
+woDMFS1P.matched_data_lesion <- merge(x = woDMFS1P.sclesion_events %>% group_by(PATIENT_ID) %>% summarize_all(max), y = woDMFS1P.matched_data, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P.hdmt_treatments_lesion = woDMFS1P.matched_data_lesion[(woDMFS1P.matched_data_lesion$GROUP == "hDMT") & (woDMFS1P.matched_data_lesion$outcome == 1), "TREATMENT_DICT"]
+n_high_lesion = length(woDMFS1P.hdmt_treatments_lesion)
+woDMFS1P.ldmt_treatments_lesion = woDMFS1P.matched_data_lesion[(woDMFS1P.matched_data_lesion$GROUP == "lDMT") & (woDMFS1P.matched_data_lesion$outcome == 1), "TREATMENT_DICT"]
+n_low_lesion = length(woDMFS1P.ldmt_treatments_lesion)
+woDMFS1P.hdmt_treatmentduration_lesion = sum(woDMFS1P.matched_data_lesion[(woDMFS1P.matched_data_lesion$GROUP == "hDMT") & (woDMFS1P.matched_data_lesion$outcome == 1), "INCLUDED_FOLLOWUP"])
+woDMFS1P.ldmt_treatmentduration_lesion = sum(woDMFS1P.matched_data_lesion[(woDMFS1P.matched_data_lesion$GROUP == "lDMT") & (woDMFS1P.matched_data_lesion$outcome == 1), "INCLUDED_FOLLOWUP"])
+
+woDMFS1P.dict_hdmt = get_treatment_dict(woDMFS1P.hdmt_treatments, woDMFS1P.hdmt_treatmentduration)
+woDMFS1P.refactored_hdmt = cluster_small(woDMFS1P.dict_hdmt)
+woDMFS1P.dict_ldmt = get_treatment_dict(woDMFS1P.ldmt_treatments, woDMFS1P.ldmt_treatmentduration)
+woDMFS1P.refactored_ldmt = cluster_small(woDMFS1P.dict_ldmt)
+
+woDMFS1P.dict_hdmt_lesion = get_treatment_dict(woDMFS1P.hdmt_treatments_lesion, woDMFS1P.hdmt_treatmentduration_lesion)
+woDMFS1P.refactored_hdmt_lesion = cluster_small(woDMFS1P.dict_hdmt_lesion)
+woDMFS1P.dict_ldmt_lesion = get_treatment_dict(woDMFS1P.ldmt_treatments_lesion, woDMFS1P.ldmt_treatmentduration_lesion)
+woDMFS1P.refactored_ldmt_lesion = cluster_small(woDMFS1P.dict_ldmt_lesion)
+
+par(mfrow=c(2,2), mar = c(0,0,2.25,1), oma = c(0,0,0,0))
+
+high_other_therapies = woDMFS1P.refactored_hdmt[[2]]
+htdict <- woDMFS1P.refactored_hdmt[[1]]
+htdict = htdict[order(names(htdict))]
+if(length(high_other_therapies) > 0){
+  a <- c(htdict[c("Other*", "None")], htdict[-c(match("Other*", names(htdict)), match("None", names(htdict)))])
+}else{
+    a <- c(htdict[c("None")], htdict[-c(match("None", names(htdict)))])  
+}
+
+low_other_therapies = woDMFS1P.refactored_ldmt[[2]]
+ltdict <- woDMFS1P.refactored_ldmt[[1]]
+ltdict = ltdict[order(names(ltdict))]
+if(length(low_other_therapies) > 0){
+  b <- c(ltdict[c("Other*", "None")], ltdict[-c(match("Other*", names(ltdict)), match("None", names(ltdict)))])
+}else{
+    b <- c(ltdict[c("None")], ltdict[-c(match("None", names(ltdict)))])  
+}
+
+high_other_therapies_lesion = woDMFS1P.refactored_hdmt_lesion[[2]]
+htldict <- woDMFS1P.refactored_hdmt_lesion[[1]]
+htldict <- htldict[order(names(htldict))]
+if(length(high_other_therapies_lesion) > 0){
+  c <- c(htldict[c("Other*", "None")], htldict[-c(match("Other*", names(htldict)), match("None", names(htldict)))])
+}else{
+  c <- c(htldict[c("None")], htldict[-c(match("None", names(htldict)))])  
+}
+
+low_other_therapies_lesion = woDMFS1P.refactored_ldmt_lesion[[2]]
+ltldict <- woDMFS1P.refactored_ldmt_lesion[[1]]
+ltldict = ltldict[order(names(ltldict))]
+if(length(low_other_therapies_lesion) > 0){
+  d <- c(ltldict[c("Other*", "None")], ltldict[-c(match("Other*", names(ltldict)), match("None", names(ltldict)))])
+}else{
+  d <- c(ltldict[c("None")], ltldict[-c(match("None", names(ltldict)))])  
+}
+colors <- brewer.pal(n=length(unique(c(names(a), names(c)))), name = palette)
+names(colors) = unique(c(names(a), names(c)))
+
+high_pie <- pie(a, col=colors[names(a)])
+title("hDMT group", line=1.25)
+mtext(side=3, adj=0, line=1, substitute(paste(bold("A"))))
+mtext(side=3, line=0, paste("n=", n_high, "with", round(woDMFS1P.hdmt_treatmentduration/365.25, digits=1), "follow-up years"), cex=0.8)
+
+low_pie <- pie(b, col=brewer.pal(n = length(b), name = palette))
+title("lDMT group", line=1.25)
+mtext(side=3, line=0, paste("n=", n_low, "with", round(woDMFS1P.ldmt_treatmentduration/365.25, digits=1), "follow-up years"), cex=0.8)
+
+high_pie_lesion <- pie(c, col=colors[names(c)])
+mtext(side=3, adj=0, line=1, substitute(paste(bold("B"))))
+mtext(side=3, line=1, "Subgroup with new cord lesions", cex=0.8)
+mtext(side=3, line=0, paste("n=", n_high_lesion, "with", round(sum(woDMFS1P.hdmt_treatmentduration_lesion/365.25), digits=1), "follow-up years"), cex=0.8)
+
+low_pie_lesion <- pie(d, col=brewer.pal(n = length(d), name = palette))
+mtext(side=3, line=1, "Subgroup with new cord lesions", cex=0.8)
+mtext(side=3, line=0, paste("n=", n_low_lesion, "with", round(sum(woDMFS1P.ldmt_treatmentduration_lesion/365.25), digits=1), "follow-up years"), cex=0.8)
+```
+:::
+
+```{r prim-surv-plot, fig.cap="Cumulative hazard plots and risk tables for (**A**) new spinal cord lesions, (**B**) new brain lesions and (**C**) relapses in the hDMT vs. lDMT group.", fig.width=11, class.source='fullcenter'}
+
+generate_survival_plot <- function(data, exp_val, ci95_lb, ci95_ub, p_val, control_label, intervention_label, remove_y, y_label, no_legend){
+
+remove_legend = NULL
+if(remove_y == 1){
+  plottheme = theme(legend.position = "top", legend.direction = "horizontal",
+                                    axis.title.y = element_blank())
+}else if(no_legend){
+  plottheme = theme(
+        legend.position = "top",
+        legend.text = element_text(color = "white")
+    )
+  remove_legend = guides(color = guide_legend(override.aes= list(alpha = 0, color = "white", fill  = NA)))
+}else{
+  plottheme = theme(legend.position = "top", legend.direction = "horizontal")
+}
+  surv = survfit2(Surv(start, end, outcome) ~ GROUP, data = data, weights = new_weights)
+surv %>%
+  ggsurvfit(linewidth=1.3) +
+  labs(
+    x = "Years",
+    y = y_label
+  ) +
+  # add_confidence_interval() +
+  add_risktable(times=seq(0,5,1), risktable_group = "risktable_stats", stats_label=c("n.risk"="Number at risk", "cum.event"="Cumulative number of events")) +
+  scale_x_continuous(breaks=seq(0,5,1)) +
+  coord_cartesian(xlim = c(0, 5.1), ylim=c(0, max(surv$cumhaz)+0.25)) +
+  theme_classic2(base_size=12, base_family = "Arial") +
+  scale_color_manual(values=plot_colors)+
+  scale_fill_manual(values=plot_colors) +
+  add_risktable_strata_symbol(symbol = "\U25CF", size = 14) +
+  plottheme +
+  remove_legend +
+  annotate(y = Inf, x = 1, hjust=0, vjust=1, geom="text", label = sprintf("HR %.2f (95%% CI %.2f - %.2f)\np %s%s", exp_val, ci95_lb, ci95_ub, ifelse(p_val < 0.001, "", "= "),format.pval(p_val, digits=3, nsmall=2, eps=0.001)), size=3, hjust = 0)
+}
+
+fig_sclesion <- generate_survival_plot(woDMFS1P.merged, woDMFS1P_results.exp, woDMFS1P_results.ci95_lb, woDMFS1P_results.ci95_ub, adjusted_p[1], ">90% lDMT", ">90% hDMT", 0, expression(atop("Cumulative hazard of", bold("new spinal cord lesions"))), 0)
+fig_sclesion$data$estimate <- -log(fig_sclesion$data$estimate)
+fig_sclesion$data$conf.high <- -log(fig_sclesion$data$conf.high)
+fig_sclesion$data$conf.low <- -log(fig_sclesion$data$conf.low)
+
+fig_relapse <- generate_survival_plot(woDMFS1P.merged_relapse, woDMFS1P_relapse_results.exp, woDMFS1P_relapse_results.ci95_lb, woDMFS1P_relapse_results.ci95_ub, adjusted_p[2], ">90% lDMT", ">90% hDMT", 0, expression(atop("Cumulative hazard of", bold("relapses"))), 1)
+fig_relapse$data$estimate <- -log(fig_relapse$data$estimate)
+fig_relapse$data$conf.high <- -log(fig_relapse$data$conf.high)
+fig_relapse$data$conf.low <- -log(fig_relapse$data$conf.low)
+
+fig_brainlesion <- generate_survival_plot(woDMFS1P.merged_brainlesion, woDMFS1P_brainlesion_results.exp, woDMFS1P_brainlesion_results.ci95_lb, woDMFS1P_brainlesion_results.ci95_ub, adjusted_p[3], ">90% lDMT", ">90% hDMT", 0,expression(atop("Cumulative hazard of", bold("new brain lesions"))), 1)
+fig_brainlesion$data$estimate <- -log(fig_brainlesion$data$estimate)
+fig_brainlesion$data$conf.high <- -log(fig_brainlesion$data$conf.high)
+fig_brainlesion$data$conf.low <- -log(fig_brainlesion$data$conf.low)
+
+cowplot::plot_grid(ggsurvfit_build(fig_sclesion), ggsurvfit_build(fig_brainlesion), ggsurvfit_build(fig_relapse), labels=c("A", "B", "C"), ncol = 3)
+```
+
+```{r table-lesion, include=FALSE}
+    combined_data = woDMFS1P.matched_data_lesion #[woDMFS1P.matched_data_lesion$HIGH_GROUP == 1,]
+    combined_data$FIRST_SYMPTOM = NA
+    combined_data[combined_data$FIRST_SYMPTOM_SUPRATENTORIAL == 'true',]$FIRST_SYMPTOM = 3
+    combined_data[combined_data$FIRST_SYMPTOM_OPTIC_PATHWAYS == 'true',]$FIRST_SYMPTOM = 0
+    combined_data[combined_data$FIRST_SYMPTOM_BRAINTSTEM == 'true',]$FIRST_SYMPTOM = 1
+    combined_data[combined_data$FIRST_SYMPTOM_SPINAL_CORD == 'true',]$FIRST_SYMPTOM = 2
+    combined_data$INCLUDED_FOLLOWUP = combined_data$INCLUDED_FOLLOWUP/365.25
+    combined_data$COUNTRY = factor(combined_data$COUNTRY)
+    combined_data$BRAIN_MRI_T2_LESIONCAT_LAB = recode(combined_data$BRAIN_MRI_T2_LESIONCAT ,'0'='0', '1'='1-2', '2'='3-8', '3'='9+')
+    table_variables <- c('HIGH_GROUP', 'AGE_BASELINE', 'GENDER', 'EDSS', "BRAIN_MRI_T2_LESIONCAT_LAB", "SC_MRI_LESIONCOUNT", "RELAPSES_1Y", "RELAPSES_2Y", "INCLUDED_FOLLOWUP", "DISEASE_DURATION", "FIRST_SYMPTOM", "outcome") # FIRST_TREATMENT
+    combined_data <- combined_data %>% select(all_of(table_variables))
+
+    var_label(combined_data) <- list(AGE_BASELINE = "Age", EDSS = "EDSS", GENDER = "Gender", RELAPSES_2Y = "Relapses in past 2 years", RELAPSES_1Y = "Relapses in past year", SC_MRI_LESIONCOUNT = "Baseline spinal cord lesions", BRAIN_MRI_T2_LESIONCAT_LAB = "Baseline brain lesions", DISEASE_DURATION = "Years since first symptoms", INCLUDED_FOLLOWUP = "Follow-up in years", FIRST_SYMPTOM = "First clinical syndrome", outcome="OUTCOME") #FIRST_TREATMENT = "Initiated treatment"
+    table2 <- combined_data %>% tbl_summary(by=outcome, type = list(RELAPSES_1Y ~ 'continuous', RELAPSES_2Y ~ 'continuous', SC_MRI_LESIONCOUNT ~ 'continuous', EDSS ~ 'continuous', GENDER ~ 'categorical'))
+    table2
+```
+
+```{r sens-outcomes-table}
+outcome_table <- data.frame(Analysis = character(), n_unmatched_ldmt = numeric(), n_unmatched_hdmt = numeric(), n_matched_ldmt = numeric(), n_matched_hdmt = numeric(), sclesion_HR = numeric(), sclesion_CI95_LB = numeric(), sclesion_CI95_UB = numeric(), sclesion_p = character(), sclesion_p_adj = character(), relapse_HR = numeric(), relapse_CI95_LB = numeric(), relapse_CI95_UB = numeric(), relapse_p = character(), relapse_p_adj= character(), brain_HR = numeric(), brain_CI95_LB = numeric(), brain_CI95_UB = numeric(), brain_p = character(), brain_p_adj = character())
+
+outcome_table[1,] = c("without DMF & S1Ps", nrow(woDMFS1P.unmatched_data[woDMFS1P.unmatched_data$HIGH_GROUP == 0,]), nrow(woDMFS1P.unmatched_data[woDMFS1P.unmatched_data$HIGH_GROUP == 1,]), nrow(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 0,]), nrow(woDMFS1P.matched_data[woDMFS1P.matched_data$HIGH_GROUP == 1,]), woDMFS1P_results.exp, woDMFS1P_results.ci95_lb, woDMFS1P_results.ci95_ub, format.pval(round(woDMFS1P_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[1],3), digits=3, nsmall=3, eps=0.001), woDMFS1P_relapse_results.exp, woDMFS1P_relapse_results.ci95_lb, woDMFS1P_relapse_results.ci95_ub, format.pval(round(woDMFS1P_relapse_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[2],3), digits=3, nsmall=3, eps=0.001), woDMFS1P_brainlesion_results.exp, woDMFS1P_brainlesion_results.ci95_lb, woDMFS1P_brainlesion_results.ci95_ub, format.pval(round(woDMFS1P_brainlesion_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(adjusted_p[3], digits=3, nsmall=3, eps=0.001))
+
+outcome_table[2,] = c("with S1Ps", nrow(woDMF.unmatched_data[woDMF.unmatched_data$HIGH_GROUP == 0,]), nrow(woDMF.unmatched_data[woDMF.unmatched_data$HIGH_GROUP == 1,]), nrow(woDMF.matched_data[woDMF.matched_data$HIGH_GROUP == 0,]), nrow(woDMF.matched_data[woDMF.matched_data$HIGH_GROUP == 1,]), woDMF_results.exp, woDMF_results.ci95_lb, woDMF_results.ci95_ub, format.pval(round(woDMF_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(adjusted_p[4], digits=3, nsmall=3, eps=0.001), woDMF_relapse_results.exp, woDMF_relapse_results.ci95_lb, woDMF_relapse_results.ci95_ub, format.pval(round(woDMF_relapse_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[5],3), digits=3, nsmall=3, eps=0.001), woDMF_brainlesion_results.exp, woDMF_brainlesion_results.ci95_lb, woDMF_brainlesion_results.ci95_ub, format.pval(round(woDMF_brainlesion_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[6],3), digits=3, nsmall=3, eps=0.001))
+
+outcome_table[3,] = c("with S1Ps & DMF", nrow(wo.matched_data[wo.unmatched_data$HIGH_GROUP == 0,]), nrow(wo.matched_data[wo.unmatched_data$HIGH_GROUP == 1,]), nrow(wo.matched_data[wo.matched_data$HIGH_GROUP == 0,]), nrow(wo.matched_data[wo.matched_data$HIGH_GROUP == 1,]), results.exp, results.ci95_lb, results.ci95_ub, format.pval(round(results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[7],3), digits=3, nsmall=3, eps=0.001), relapse_results.exp, relapse_results.ci95_lb, relapse_results.ci95_ub, format.pval(round(relapse_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[8],3), digits=3, nsmall=3, eps=0.001), brainlesion_results.exp, brainlesion_results.ci95_lb, brainlesion_results.ci95_ub, format.pval(round(brainlesion_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[9],3), digits=3, nsmall=3, eps=0.001))
+
+outcome_table[4,] = c("cutoff 80%", nrow(woDMFS1P_sens80.unmatched_data[woDMFS1P_sens80.unmatched_data$HIGH_GROUP == 0,]), nrow(woDMFS1P_sens80.unmatched_data[woDMFS1P_sens80.unmatched_data$HIGH_GROUP == 1,]), nrow(woDMFS1P_sens80.matched_data[woDMFS1P_sens80.matched_data$HIGH_GROUP == 0,]), nrow(woDMFS1P_sens80.matched_data[woDMFS1P_sens80.matched_data$HIGH_GROUP == 1,]), woDMFS1P_sens80_results.exp, woDMFS1P_sens80_results.ci95_lb, woDMFS1P_sens80_results.ci95_ub, format.pval(round(woDMFS1P_sens80_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[10],3), digits=3, nsmall=3, eps=0.001), woDMFS1P_sens80_relapse_results.exp, woDMFS1P_sens80_relapse_results.ci95_lb, woDMFS1P_sens80_relapse_results.ci95_ub, format.pval(round(woDMFS1P_sens80_relapse_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(adjusted_p[11], digits=3, nsmall=3, eps=0.001), woDMFS1P_sens80_brainlesion_results.exp, woDMFS1P_sens80_brainlesion_results.ci95_lb, woDMFS1P_sens80_brainlesion_results.ci95_ub, format.pval(round(woDMFS1P_sens80_brainlesion_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[12],3), digits=3, nsmall=3, eps=0.001))
+
+outcome_table[5,] = c("cutoff 95%", nrow(woDMFS1P_sens95.unmatched_data[woDMFS1P_sens95.unmatched_data$HIGH_GROUP == 0,]), nrow(woDMFS1P_sens95.unmatched_data[woDMFS1P_sens95.unmatched_data$HIGH_GROUP == 1,]), nrow(woDMFS1P_sens95.matched_data[woDMFS1P_sens95.matched_data$HIGH_GROUP == 0,]), nrow(woDMFS1P_sens95.matched_data[woDMFS1P_sens95.matched_data$HIGH_GROUP == 1,]), woDMFS1P_sens95_results.exp, woDMFS1P_sens95_results.ci95_lb, woDMFS1P_sens95_results.ci95_ub, format.pval(round(woDMFS1P_sens95_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[13],3), digits=3, nsmall=3, eps=0.001), woDMFS1P_sens95_relapse_results.exp, woDMFS1P_sens95_relapse_results.ci95_lb, woDMFS1P_sens95_relapse_results.ci95_ub, format.pval(round(woDMFS1P_sens95_relapse_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[14],3), digits=3, nsmall=3, eps=0.001), woDMFS1P_sens95_brainlesion_results.exp, woDMFS1P_sens95_brainlesion_results.ci95_lb, woDMFS1P_sens95_brainlesion_results.ci95_ub, format.pval(round(woDMFS1P_sens95_brainlesion_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[15],3), digits=3, nsmall=3, eps=0.001))
+
+outcome_table[6,] = c("broad caliper", nrow(woDMFS1P.unmatched_data[woDMFS1P.unmatched_data$HIGH_GROUP == 0,]), nrow(woDMFS1P.unmatched_data[woDMFS1P.unmatched_data$HIGH_GROUP == 1,]), nrow(woDMFS1P_sens_caliper.matched_data[woDMFS1P_sens_caliper.matched_data$HIGH_GROUP == 0,]), nrow(woDMFS1P_sens_caliper.matched_data[woDMFS1P_sens_caliper.matched_data$HIGH_GROUP == 1,]), woDMFS1P_sens_caliper_results.exp, woDMFS1P_sens_caliper_results.ci95_lb, woDMFS1P_sens_caliper_results.ci95_ub, format.pval(round(woDMFS1P_sens_caliper_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[16],3), digits=3, nsmall=3, eps=0.001), woDMFS1P_sens_caliper_relapse_results.exp, woDMFS1P_sens_caliper_relapse_results.ci95_lb, woDMFS1P_sens_caliper_relapse_results.ci95_ub, format.pval(round(woDMFS1P_sens_caliper_relapse_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[17],3), digits=3, nsmall=3, eps=0.001), woDMFS1P_sens_caliper_brainlesion_results.exp, woDMFS1P_sens_caliper_brainlesion_results.ci95_lb, woDMFS1P_sens_caliper_brainlesion_results.ci95_ub, format.pval(round(woDMFS1P_sens_caliper_brainlesion_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[18],3), digits=3, nsmall=3, eps=0.001))
+
+outcome_table[7,] = c("broad caliper, cutoff 80%", nrow(woDMFS1P_sens80.unmatched_data[woDMFS1P_sens80.unmatched_data$HIGH_GROUP == 0,]), nrow(woDMFS1P_sens80.unmatched_data[woDMFS1P_sens80.unmatched_data$HIGH_GROUP == 1,]), nrow(woDMFS1P_sens80_caliper.matched_data[woDMFS1P_sens80_caliper.matched_data$HIGH_GROUP == 0,]), nrow(woDMFS1P_sens80_caliper.matched_data[woDMFS1P_sens80_caliper.matched_data$HIGH_GROUP == 1,]), woDMFS1P_sens80_caliper_results.exp, woDMFS1P_sens80_caliper_results.ci95_lb, woDMFS1P_sens80_caliper_results.ci95_ub, format.pval(round(woDMFS1P_sens80_caliper_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[19],3), digits=3, nsmall=3, eps=0.001), woDMFS1P_sens80_caliper_relapse_results.exp, woDMFS1P_sens80_caliper_relapse_results.ci95_lb, woDMFS1P_sens80_caliper_relapse_results.ci95_ub, format.pval(round(woDMFS1P_sens80_caliper_relapse_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[20],3), digits=3, nsmall=3, eps=0.001), woDMFS1P_sens80_caliper_brainlesion_results.exp, woDMFS1P_sens80_caliper_brainlesion_results.ci95_lb, woDMFS1P_sens80_caliper_brainlesion_results.ci95_ub, format.pval(round(woDMFS1P_sens80_caliper_brainlesion_results.p,3), digits=3, nsmall=3, eps=0.001), format.pval(round(adjusted_p[21],3), digits=3, nsmall=3, eps=0.001))
+
+outcome_table <- type.convert(outcome_table, as.is = TRUE)
+
+outcome_gt_table <- outcome_table |> gt(rowname_col = "Analysis") |>
+  fmt_number(columns = ends_with(c("HR", "CI95_LB", "CI95_UB")), decimals = 2, use_seps = FALSE) |>
+  # fmt_number(columns = ends_with(c("p")), decimals = 3, use_seps = FALSE) |>
+  tab_style(style = list(cell_text(whitespace = "nowrap")), locations = cells_body(columns = everything())) |>
+  tab_style(style = list(cell_text(whitespace = "nowrap")), locations = cells_column_spanners(spanners = everything())) |>
+  tab_style(style = list(cell_text(whitespace = "nowrap")), locations = cells_column_labels(columns = everything())) |>
+  tab_style(style = list(cell_text(weight = "bold")), locations = cells_body(columns = "brain_p_adj", rows = brain_p_adj < 0.05)) |>
+  tab_style(style = list(cell_text(weight = "bold")), locations = cells_body(columns = "relapse_p_adj", rows = relapse_p_adj < 0.05)) |>
+  tab_style(style = list(cell_text(weight = "bold")), locations = cells_body(columns = "sclesion_p_adj", rows = sclesion_p_adj < 0.05)) |>
+  tab_options(table.font.size = 11.5) |>
+  cols_merge(columns = c(sclesion_HR, sclesion_CI95_LB, sclesion_CI95_UB), pattern = "{1} ({2}-{3})") |>
+  cols_merge(columns = c(relapse_HR, relapse_CI95_LB, relapse_CI95_UB), pattern = "{1} ({2}-{3})") |>
+  cols_merge(columns = c(brain_HR, brain_CI95_LB, brain_CI95_UB), pattern = "{1} ({2}-{3})") |>
+  cols_align(align = "center", columns = !contains("Analysis")) |>
+  cols_label(
+    sclesion_HR = "HR (95% CI)",
+    brain_HR = "HR (95% CI)",
+    relapse_HR = "HR (95% CI)",
+    sclesion_p = "p",
+    brain_p = "p",
+    relapse_p = "p",
+    sclesion_p_adj = "Adj. p",
+    brain_p_adj = "Adj. p",
+    relapse_p_adj = "Adj. p",
+    n_unmatched_ldmt = md("lDMT<br/>n"),
+    n_unmatched_hdmt = md("hDMT<br/>n"),
+    n_matched_ldmt = md("lDMT<br/>n"),
+    n_matched_hdmt = md("hDMT<br/>n"),
+  ) |>
+  tab_spanner(
+    label = "Brain lesions",
+    columns = starts_with("brain")) |>
+  tab_spanner(
+    label = "Cord lesions",
+    columns = starts_with("sclesion")) |>
+  tab_spanner(
+    label = "Relapses",
+    columns = starts_with("relapse")) |>
+  tab_spanner(
+    label = "Matched",
+    columns = starts_with("n_matched")) |>
+  tab_spanner(
+    label = "Unmatched",
+    columns = starts_with("n_unmatched")) |>
+  tab_row_group(
+    label = "Sensitivity analysis",
+    rows = c(starts_with("cutoff"), starts_with("broad"))
+  ) |>
+  tab_row_group(
+    label = "Primary & secondary analysis",
+    rows = c(starts_with("with"))
+  ) |>
+  tab_caption(caption = md("Hazard ratios and respective confidence intervals and p-values for the primary, secondary and sensitivity analyses."))
+
+outcome_gt_table
+```
+
+# Supplements
+
+## S2 - Propensity score matching
+
+```{r love-plot, fig.cap="Covariate balance before and after matching in the primary analysis"}
+love.plot(woDMFS1P.matched, binary = "std")
+```
+
+```{r jitter-plot, echo=FALSE, fig.cap="Propensity score matching of hDMT and lDMT groups in the primary analysis"}
+plot(woDMFS1P.matched, type = "jitter", interactive = FALSE)
+```
+
+## S3 - Country of treatment of matched patients
+
+```{r country-table}
+table_split[[2]]
+```
+
+## S4 - Patient characteristics and treatments for sensitivity analysis (broad caliper, 80% cutoff)
+
+```{r table-one-sens95, include=FALSE}
+tableone.all <- data.frame(summary(woDMFS1P_sens95.matched)$sum.all) %>% mutate(across(where(is.numeric), ~ round(., 2)))
+tableone.matched <- data.frame(summary(woDMFS1P_sens95.matched)$sum.matched) %>% mutate(across(where(is.numeric), ~ round(., 2)))
+
+generate_table1(woDMFS1P_sens95.matched, woDMFS1P_sens95.matched_data, woDMFS1P_sens95.unmatched_data)
+```
+
+```{r table-one-sens80, include=FALSE}
+tableone.all <- data.frame(summary(woDMFS1P_sens80.matched)$sum.all) %>% mutate(across(where(is.numeric), ~ round(., 2)))
+tableone.matched <- data.frame(summary(woDMFS1P_sens80.matched)$sum.matched) %>% mutate(across(where(is.numeric), ~ round(., 2)))
+
+generate_table1(woDMFS1P_sens80.matched, woDMFS1P_sens80.matched_data, woDMFS1P_sens80.unmatched_data)
+```
+
+```{r table-one-sens-caliper, include=FALSE}
+tableone.all <- data.frame(summary(woDMFS1P_sens_caliper.matched)$sum.all) %>% mutate(across(where(is.numeric), ~ round(., 2)))
+tableone.matched <- data.frame(summary(woDMFS1P_sens_caliper.matched)$sum.matched) %>% mutate(across(where(is.numeric), ~ round(., 2)))
+
+generate_table1(woDMFS1P_sens_caliper.matched, woDMFS1P_sens_caliper.matched_data, woDMFS1P.unmatched_data)
+```
+
+```{r table-one-sens80-caliper, include=FALSE}
+tableone.all <- data.frame(summary(woDMFS1P_sens80_caliper.matched)$sum.all) %>% mutate(across(where(is.numeric), ~ round(., 2)))
+tableone.matched <- data.frame(summary(woDMFS1P_sens80_caliper.matched)$sum.matched) %>% mutate(across(where(is.numeric), ~ round(., 2)))
+
+generate_table1(woDMFS1P_sens80_caliper.matched, woDMFS1P_sens80_caliper.matched_data, woDMFS1P_sens80.unmatched_data)
+```
+
+<b>Characteristics of patients included in this sensitvity analysis</b>
+
+```{r sigsensitivity-table-one}
+generate_table1(woDMFS1P_sens80_caliper.matched, woDMFS1P_sens80_caliper.matched_data, woDMFS1P_sens80.unmatched_data)
+```
+
+```{r treatment-pies-sens80-caliper, include=FALSE, fig.cap=paste("DMT usage during follow-up as proportion of follow-up time. (A) Matched patients hDMT and lDMT group. (B) Patients from lDMT and hDMT group with new cord lesions during follow-up.", string_format_treatment_list(NULL, NULL, TRUE),". * = ", string_format_treatment_list(high_other_therapies, woDMFS1P_sens80_caliper.hdmt_treatmentduration, 0), " for the hDMT-group. In the control group: ", string_format_treatment_list(low_other_therapies, woDMFS1P_sens80_caliper.ldmt_treatmentduration, 0), ". In the subgroup with new cord lesions from the hDMT-group group: ", string_format_treatment_list(high_other_therapies_lesion, sum(woDMFS1P_sens80_caliper.hdmt_treatmentduration_lesion), 0), "and of the lDMT-patients with new cord lesions in the control group:", string_format_treatment_list(low_other_therapies_lesion, sum(woDMFS1P_sens80_caliper.ldmt_treatmentduration_lesion), 0), ".")}
+woDMFS1P_sens80_caliper.hdmt_treatments = woDMFS1P_sens80_caliper.matched_data[woDMFS1P_sens80_caliper.matched_data$GROUP == "hDMT", "TREATMENT_DICT"]
+n_high = length(woDMFS1P_sens80_caliper.hdmt_treatments)
+woDMFS1P_sens80_caliper.ldmt_treatments = woDMFS1P_sens80_caliper.matched_data[woDMFS1P_sens80_caliper.matched_data$GROUP == "lDMT", "TREATMENT_DICT"]
+n_low = length(woDMFS1P_sens80_caliper.ldmt_treatments)
+woDMFS1P_sens80_caliper.hdmt_treatmentduration = sum(woDMFS1P_sens80_caliper.matched_data[woDMFS1P_sens80_caliper.matched_data$GROUP == "hDMT", "INCLUDED_FOLLOWUP"])
+woDMFS1P_sens80_caliper.ldmt_treatmentduration = sum(woDMFS1P_sens80_caliper.matched_data[woDMFS1P_sens80_caliper.matched_data$GROUP == "lDMT", "INCLUDED_FOLLOWUP"])
+
+woDMFS1P_sens80_caliper.matched_data_lesion <- merge(x = woDMFS1P_sens80.sclesion_events %>% group_by(PATIENT_ID) %>% summarize_all(max), y = woDMFS1P_sens80_caliper.matched_data, by = "PATIENT_ID", all.y = TRUE)
+woDMFS1P_sens80_caliper.hdmt_treatments_lesion = woDMFS1P_sens80_caliper.matched_data_lesion[(woDMFS1P_sens80_caliper.matched_data_lesion$GROUP == "hDMT") & (woDMFS1P_sens80_caliper.matched_data_lesion$outcome == 1), "TREATMENT_DICT"]
+n_high_lesion = length(woDMFS1P_sens80_caliper.hdmt_treatments_lesion)
+woDMFS1P_sens80_caliper.ldmt_treatments_lesion = woDMFS1P_sens80_caliper.matched_data_lesion[(woDMFS1P_sens80_caliper.matched_data_lesion$GROUP == "lDMT") & (woDMFS1P_sens80_caliper.matched_data_lesion$outcome == 1), "TREATMENT_DICT"]
+n_low_lesion = length(woDMFS1P_sens80_caliper.ldmt_treatments_lesion)
+woDMFS1P_sens80_caliper.hdmt_treatmentduration_lesion = sum(woDMFS1P_sens80_caliper.matched_data_lesion[(woDMFS1P_sens80_caliper.matched_data_lesion$GROUP == "hDMT") & (woDMFS1P_sens80_caliper.matched_data_lesion$outcome == 1), "INCLUDED_FOLLOWUP"])
+woDMFS1P_sens80_caliper.ldmt_treatmentduration_lesion = sum(woDMFS1P_sens80_caliper.matched_data_lesion[(woDMFS1P_sens80_caliper.matched_data_lesion$GROUP == "lDMT") & (woDMFS1P_sens80_caliper.matched_data_lesion$outcome == 1), "INCLUDED_FOLLOWUP"])
+
+woDMFS1P_sens80_caliper.dict_hdmt = get_treatment_dict(woDMFS1P_sens80_caliper.hdmt_treatments, woDMFS1P_sens80_caliper.hdmt_treatmentduration)
+woDMFS1P_sens80_caliper.refactored_hdmt = cluster_small(woDMFS1P_sens80_caliper.dict_hdmt)
+woDMFS1P_sens80_caliper.dict_ldmt = get_treatment_dict(woDMFS1P_sens80_caliper.ldmt_treatments, woDMFS1P_sens80_caliper.ldmt_treatmentduration)
+woDMFS1P_sens80_caliper.refactored_ldmt = cluster_small(woDMFS1P_sens80_caliper.dict_ldmt)
+
+woDMFS1P_sens80_caliper.dict_hdmt_lesion = get_treatment_dict(woDMFS1P_sens80_caliper.hdmt_treatments_lesion, woDMFS1P_sens80_caliper.hdmt_treatmentduration_lesion)
+woDMFS1P_sens80_caliper.refactored_hdmt_lesion = cluster_small(woDMFS1P_sens80_caliper.dict_hdmt_lesion)
+woDMFS1P_sens80_caliper.dict_ldmt_lesion = get_treatment_dict(woDMFS1P_sens80_caliper.ldmt_treatments_lesion, woDMFS1P_sens80_caliper.ldmt_treatmentduration_lesion)
+woDMFS1P_sens80_caliper.refactored_ldmt_lesion = cluster_small(woDMFS1P_sens80_caliper.dict_ldmt_lesion)
+
+par(mfrow=c(2,2), mar = c(0,0,2.25,1), oma = c(0,0,0,0))
+
+high_other_therapies = woDMFS1P_sens80_caliper.refactored_hdmt[[2]]
+htdict <- woDMFS1P_sens80_caliper.refactored_hdmt[[1]]
+htdict = htdict[order(names(htdict))]
+if(length(high_other_therapies) > 0){
+  a <- c(htdict[c("Other*", "None")], htdict[-c(match("Other*", names(htdict)), match("None", names(htdict)))])
+}else{
+    a <- c(htdict[c("None")], htdict[-c(match("None", names(htdict)))])  
+}
+
+low_other_therapies = woDMFS1P_sens80_caliper.refactored_ldmt[[2]]
+ltdict <- woDMFS1P_sens80_caliper.refactored_ldmt[[1]]
+ltdict = ltdict[order(names(ltdict))]
+if(length(low_other_therapies) > 0){
+  b <- c(ltdict[c("Other*", "None")], ltdict[-c(match("Other*", names(ltdict)), match("None", names(ltdict)))])
+}else{
+    b <- c(ltdict[c("None")], ltdict[-c(match("None", names(ltdict)))])  
+}
+
+high_other_therapies_lesion = woDMFS1P_sens80_caliper.refactored_hdmt_lesion[[2]]
+htldict <- woDMFS1P_sens80_caliper.refactored_hdmt_lesion[[1]]
+htldict <- htldict[order(names(htldict))]
+if(length(high_other_therapies_lesion) > 0){
+  c <- c(htldict[c("Other*", "None")], htldict[-c(match("Other*", names(htldict)), match("None", names(htldict)))])
+}else{
+  c <- c(htldict[c("None")], htldict[-c(match("None", names(htldict)))])  
+}
+
+low_other_therapies_lesion = woDMFS1P_sens80_caliper.refactored_ldmt_lesion[[2]]
+ltldict <- woDMFS1P_sens80_caliper.refactored_ldmt_lesion[[1]]
+ltldict = ltldict[order(names(ltldict))]
+if(length(low_other_therapies_lesion) > 0){
+  d <- c(ltldict[c("Other*", "None")], ltldict[-c(match("Other*", names(ltldict)), match("None", names(ltldict)))])
+}else{
+  d <- c(ltldict[c("None")], ltldict[-c(match("None", names(ltldict)))])  
+}
+
+colors <- brewer.pal(n=length(unique(c(names(a), names(c)))), name = palette)
+names(colors) = unique(c(names(a), names(c)))
+
+high_pie <- pie(a, col=colors[names(a)])
+title("hDMT group", line=1.25)
+mtext(side=3, adj=0, line=1, substitute(paste(bold("A"))))
+mtext(side=3, line=0, paste("n=", n_high, "with", round(woDMFS1P_sens80_caliper.hdmt_treatmentduration/365.25, digits=1), "follow-up years"), cex=0.8)
+
+low_pie <- pie(b, col=brewer.pal(n = length(b), name = palette))
+title("lDMT group", line=1.25)
+mtext(side=3, line=0, paste("n=", n_low, "with", round(woDMFS1P_sens80_caliper.ldmt_treatmentduration/365.25, digits=1), "follow-up years"), cex=0.8)
+
+high_pie_lesion <- pie(c, col=colors[names(c)])
+mtext(side=3, adj=0, line=1, substitute(paste(bold("B"))))
+mtext(side=3, line=1, "Subgroup with new cord lesions", cex=0.8)
+mtext(side=3, line=0, paste("n=", n_high_lesion, "with", round(sum(woDMFS1P_sens80_caliper.hdmt_treatmentduration_lesion/365.25), digits=1), "follow-up years"), cex=0.8)
+
+low_pie_lesion <- pie(d, col=brewer.pal(n = length(d), name = palette))
+mtext(side=3, line=1, "Subgroup with new cord lesions", cex=0.8)
+mtext(side=3, line=0, paste("n=", n_low_lesion, "with", round(sum(woDMFS1P_sens80_caliper.ldmt_treatmentduration_lesion/365.25), digits=1), "follow-up years"), cex=0.8)
+```
+
+```{r table-one-wo, include=FALSE}
+tableone.all <- data.frame(summary(wo.matched)$sum.all) %>% mutate(across(where(is.numeric), ~ round(., 2)))
+tableone.matched <- data.frame(summary(wo.matched)$sum.matched) %>% mutate(across(where(is.numeric), ~ round(., 2)))
+# TODO: Relapse no decimals
+generate_table1(wo.matched, wo.matched_data, wo.unmatched_data)
+```
+
+```{r sec-surv-plot, include=FALSE, fig.cap="Cumulative hazars plots for (**A**) new spinal cord lesions, (**B**) new brain lesions and (**C**) relapses in the hDMT vs. lDMT group.", fig.width=11}
+fig_sclesion <- generate_survival_plot(wo.merged, results.exp, results.ci95_lb, results.ci95_ub, results.p, ">90% lDMT", ">90% hDMT", 0, expression(atop("Cumulative hazard of", bold("new spinal cord lesions"))), 0)
+fig_sclesion$data$estimate <- -log(fig_sclesion$data$estimate)
+fig_sclesion$data$conf.high <- -log(fig_sclesion$data$conf.high)
+fig_sclesion$data$conf.low <- -log(fig_sclesion$data$conf.low)
+
+fig_relapse <- generate_survival_plot(wo.merged_relapse, relapse_results.exp, relapse_results.ci95_lb, relapse_results.ci95_ub, relapse_results.p, ">90% lDMT", ">90% hDMT", 0, expression(atop("Cumulative hazard of", bold("relapses"))), 1)
+fig_relapse$data$estimate <- -log(fig_relapse$data$estimate)
+fig_relapse$data$conf.high <- -log(fig_relapse$data$conf.high)
+fig_relapse$data$conf.low <- -log(fig_relapse$data$conf.low)
+
+fig_brainlesion <- generate_survival_plot(wo.merged_brainlesion, brainlesion_results.exp, brainlesion_results.ci95_lb, brainlesion_results.ci95_ub, brainlesion_results.p, ">90% lDMT", ">90% hDMT", 0,expression(atop("Cumulative hazard of", bold("new brain lesions"))), 1)
+fig_brainlesion$data$estimate <- -log(fig_brainlesion$data$estimate)
+fig_brainlesion$data$conf.high <- -log(fig_brainlesion$data$conf.high)
+fig_brainlesion$data$conf.low <- -log(fig_brainlesion$data$conf.low)
+
+cowplot::plot_grid(ggsurvfit_build(fig_sclesion), ggsurvfit_build(fig_relapse), ggsurvfit_build(fig_brainlesion), labels=c("A", "B", "C"), ncol = 3)
+```
+
+```{r sens95-surv-plot, include=FALSE, fig.cap="Cumulative hazars plots for (**A**) new spinal cord lesions, (**B**) relapses and (**C**) new brain lesions in the hDMT vs. lDMT group.", fig.width=11}
+
+fig_sclesion <- generate_survival_plot(woDMFS1P_sens95.merged, woDMFS1P_sens95_results.exp, woDMFS1P_sens95_results.ci95_lb, woDMFS1P_sens95_results.ci95_ub, woDMFS1P_sens95_results.p, ">95% lDMT", ">95% hDMT", 0, expression(atop("Cumulative hazard of", bold("new spinal cord lesions"))), 0)
+fig_sclesion$data$estimate <- -log(fig_sclesion$data$estimate)
+fig_sclesion$data$conf.high <- -log(fig_sclesion$data$conf.high)
+fig_sclesion$data$conf.low <- -log(fig_sclesion$data$conf.low)
+
+fig_relapse <- generate_survival_plot(woDMFS1P_sens95.merged_relapse, woDMFS1P_sens95_relapse_results.exp, woDMFS1P_sens95_relapse_results.ci95_lb, woDMFS1P_sens95_relapse_results.ci95_ub, woDMFS1P_sens95_relapse_results.p, ">95% lDMT", ">95% hDMT", 0, expression(atop("Cumulative hazard of", bold("relapses"))), 1)
+fig_relapse$data$estimate <- -log(fig_relapse$data$estimate)
+fig_relapse$data$conf.high <- -log(fig_relapse$data$conf.high)
+fig_relapse$data$conf.low <- -log(fig_relapse$data$conf.low)
+
+fig_brainlesion <- generate_survival_plot(woDMFS1P_sens95.merged_brainlesion, woDMFS1P_sens95_brainlesion_results.exp, woDMFS1P_sens95_brainlesion_results.ci95_lb, woDMFS1P_sens95_brainlesion_results.ci95_ub, woDMFS1P_sens95_brainlesion_results.p, ">90% lDMT", ">90% hDMT", 0,expression(atop("Cumulative hazard of", bold("new brain lesions"))), 1)
+fig_brainlesion$data$estimate <- -log(fig_brainlesion$data$estimate)
+fig_brainlesion$data$conf.high <- -log(fig_brainlesion$data$conf.high)
+fig_brainlesion$data$conf.low <- -log(fig_brainlesion$data$conf.low)
+
+cowplot::plot_grid(ggsurvfit_build(fig_sclesion), ggsurvfit_build(fig_brainlesion), ggsurvfit_build(fig_relapse), labels=c("A", "B", "C"), ncol = 3)
+```
+
+```{r sens80-surv-plot, include=FALSE, fig.cap="Cumulative hazars plots for (**A**) new spinal cord lesions, (**B**) relapses and (**C**) new brain lesions in the hDMT vs. lDMT group.", fig.width=11}
+
+fig_sclesion <- generate_survival_plot(woDMFS1P_sens80.merged, woDMFS1P_sens80_results.exp, woDMFS1P_sens80_results.ci95_lb, woDMFS1P_sens80_results.ci95_ub, woDMFS1P_sens80_results.p, ">80% lDMT", ">80% hDMT", 0, expression(atop("Cumulative hazard of", bold("new spinal cord lesions"))), 0)
+fig_sclesion$data$estimate <- -log(fig_sclesion$data$estimate)
+fig_sclesion$data$conf.high <- -log(fig_sclesion$data$conf.high)
+fig_sclesion$data$conf.low <- -log(fig_sclesion$data$conf.low)
+
+fig_relapse <- generate_survival_plot(woDMFS1P_sens80.merged_relapse, woDMFS1P_sens80_relapse_results.exp, woDMFS1P_sens80_relapse_results.ci95_lb, woDMFS1P_sens80_relapse_results.ci95_ub, woDMFS1P_sens80_relapse_results.p, ">80% lDMT", ">80% hDMT", 0, expression(atop("Cumulative hazard of", bold("relapses"))), 1)
+fig_relapse$data$estimate <- -log(fig_relapse$data$estimate)
+fig_relapse$data$conf.high <- -log(fig_relapse$data$conf.high)
+fig_relapse$data$conf.low <- -log(fig_relapse$data$conf.low)
+
+fig_brainlesion <- generate_survival_plot(woDMFS1P_sens80.merged_brainlesion, woDMFS1P_sens80_brainlesion_results.exp, woDMFS1P_sens80_brainlesion_results.ci95_lb, woDMFS1P_sens80_brainlesion_results.ci95_ub, woDMFS1P_sens80_brainlesion_results.p, ">80% lDMT", ">80% hDMT", 0,expression(atop("Cumulative hazard of", bold("new brain lesions"))), 1)
+fig_brainlesion$data$estimate <- -log(fig_brainlesion$data$estimate)
+fig_brainlesion$data$conf.high <- -log(fig_brainlesion$data$conf.high)
+fig_brainlesion$data$conf.low <- -log(fig_brainlesion$data$conf.low)
+
+cowplot::plot_grid(ggsurvfit_build(fig_sclesion), ggsurvfit_build(fig_relapse), ggsurvfit_build(fig_brainlesion), labels=c("A", "B", "C"), ncol = 3)
+```
+
+```{r sens80-caliper-surv-plot, fig.cap="Cumulative hazard plots for (**A**) new spinal cord lesions, (**B**) relapses and (**C**) new brain lesions in the hDMT vs. lDMT group.", fig.width=11, include=FALSE}
+
+fig_sclesion <- generate_survival_plot(woDMFS1P_sens80_caliper.merged, woDMFS1P_sens80_caliper_results.exp, woDMFS1P_sens80_caliper_results.ci95_lb, woDMFS1P_sens80_caliper_results.ci95_ub, woDMFS1P_sens80_caliper_results.p, ">80% lDMT", ">80% hDMT", 0, expression(atop("Cumulative hazard of", bold("new spinal cord lesions"))), 0)
+fig_sclesion$data$estimate <- -log(fig_sclesion$data$estimate)
+fig_sclesion$data$conf.high <- -log(fig_sclesion$data$conf.high)
+fig_sclesion$data$conf.low <- -log(fig_sclesion$data$conf.low)
+
+fig_relapse <- generate_survival_plot(woDMFS1P_sens80_caliper.merged_relapse, woDMFS1P_sens80_caliper_relapse_results.exp, woDMFS1P_sens80_caliper_relapse_results.ci95_lb, woDMFS1P_sens80_caliper_relapse_results.ci95_ub, woDMFS1P_sens80_caliper_relapse_results.p, ">90% lDMT", ">90% hDMT", 0, expression(atop("Cumulative hazard of", bold("relapses"))), 1)
+fig_relapse$data$estimate <- -log(fig_relapse$data$estimate)
+fig_relapse$data$conf.high <- -log(fig_relapse$data$conf.high)
+fig_relapse$data$conf.low <- -log(fig_relapse$data$conf.low)
+
+fig_brainlesion <- generate_survival_plot(woDMFS1P_sens80_caliper.merged_brainlesion, woDMFS1P_sens80_caliper_brainlesion_results.exp, woDMFS1P_sens80_caliper_brainlesion_results.ci95_lb, woDMFS1P_sens80_caliper_brainlesion_results.ci95_ub, woDMFS1P_sens80_caliper_brainlesion_results.p, ">80% lDMT", ">80% hDMT", 0,expression(atop("Cumulative hazard of", bold("new brain lesions"))), 1)
+fig_brainlesion$data$estimate <- -log(fig_brainlesion$data$estimate)
+fig_brainlesion$data$conf.high <- -log(fig_brainlesion$data$conf.high)
+fig_brainlesion$data$conf.low <- -log(fig_brainlesion$data$conf.low)
+
+cowplot::plot_grid(ggsurvfit_build(fig_sclesion), ggsurvfit_build(fig_relapse), ggsurvfit_build(fig_brainlesion), labels=c("A", "B", "C"), ncol = 3)
+```
+
