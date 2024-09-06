@@ -1,6 +1,6 @@
-# Efficacy of disease-modifying treatment on spinal cord lesion formation in relapse-onset multiple sclerosis. An MSBase registry study.
+# Effectiveness of Disease-Modifying Treatment on Spinal Cord Lesion Formation in Relapse-Onset Multiple Sclerosis: An MSBase Registry Study
 
-This repository contains the R markdown data analysis pipeline for the study. The manuscript is currently submitted for peer review
+This repository contains the R markdown data analysis pipeline for the study.
 
 ## Data availability
 
@@ -12,7 +12,7 @@ Daniel Kreiter, Tomas Kalincik, Raymond Hupperts, Francesco Patti, Daniele Spita
 
 ## Citation
 
-Coming soon, manuscript currently under submission.
+Kreiter, D., Kalincik, T., Hupperts, R. et al. Effectiveness of Disease-Modifying Treatment on Spinal Cord Lesion Formation in Relapse-Onset Multiple Sclerosis: An MSBase Registry Study. CNS Drugs (2024). https://doi.org/10.1007/s40263-024-01115-x
 ...
 
 
